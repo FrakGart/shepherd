@@ -1,0 +1,25 @@
+application     shepherd            1.9.13	97eb6f54378516af58b6dcfcd721d27e076f0237	466f6cfb7e3adfb2ee44065b79eaa4551077cf8d
+reference       channel_list        148		98db7e8c3adfc08745e79d61b60a83dca2e797db	7ab2400e9f2c2e917578afee49f780037849fea6
+reference       Shepherd/Common.pm  1.32	b8e59c9f7e4a13517eba974c40ba5745f3688e76	a5e3b89aa0f8e096328944bed0c9eab55e231e1d
+reference       Shepherd/MythTV.pm  0.42	85f83123706d06d99d896ee3d4767d6bdff71ca1	d5f6290d8b77d537f49f43d5167a54264b2599c7
+reference       Shepherd/Configure.pm   0.42	7666e8cf87e63ed27abac3c367c6862285db6028	4da919d2272647c4fae878fea86e2ee6fba665ea
+reference	    Shepherd/json_pp.pm 0.2	af7820870d7cdfd47a593929a14e06306e9fda7b	ce32f3b0dbfbc1664b69c97faa2639461d5d8c18
+reference		DateTimeFormat/XMLTV.pm		1.001	72dc2b212d733776e7f08a0e318ff5fea4e18b3a	c16512679b7051ae50ee025ea8e3225995a7e3ff
+reference		Shepherd/FreeviewHelper.pm	1.2	45a8ed942288d494668e48df2c5dbcc441125d84	9094efa4b235878975736c7c546bc6d081246e51
+reference       TMDB.pm             1.2.1.1	ce7621b4295c50bb93cb79f088cc0107807c1c0a	f49c6a479ae40bfa46ad64127b282a649fb6f314
+#grabber         oztivo              2.64	00783671f4a4949e4b58ce7f8e6412be2c887ace	a7e799f10b7f3f707529b0ef1f906e72eb0d0528
+#grabber         sbsweb              5.05	a4e72ca0de3ace9220948171c3455a6a4b3be50b	ddee42fe50268e882edda7545d36016b3e3e766b
+#grabber         rex                 10.4.11	4ae53787498b74036bb6611ef260658a225e4842	ad91636be1b1d063aa8d9bbb1282fb156cc0419c
+#grabber         foxtel_swf          5.03	64b38cade7e38491a6712b3289887592d18b9f60	217292d82361ab4722e8f17dc678d9c448411366
+#grabber         abc_website         7.03	5b033781f567687e93c6cf785792bef96ac33125	31be91eb5ffdc65330e7b829f7a9194daa7f5a26
+#grabber         freeview            1.0.7	7d314b49651d2545c9f6852fcf9ed800e9b2cb00	745b10b7c474aec346cf57a374b264b2b764e137
+grabber         tv_grab_dvb             0.03    ffabf5683ca2e2d884a661a59a6f77d9843016e6        19cbc881113a19bee13ece3fe7bfc93890c912cf
+#reconciler      reconciler_mk2      0.58	53c4c0647abf244d0b22e7620bf1247e37abf689	8f8ee5f905bf4e844b67a557baa2b0403fb263c4
+reconciler      reconciler_mk3          0.60    53c4c0647abf244d0b22e7620bf1247e37abf689        7d4114492a40976c68fea2713e4f5a57fd9ca5d2
+#postprocessor   metacritic          1.1	5e30f527c03bbddc31a2d649c5c5c50f63848c16	59fe1817de57012e3d449e807f3941ff9e683973
+postprocessor   augment_timezone    0.30	df61b40c0943bf7568442496081a4e90d9a30fed	8b8bf1be73c1d1f1d41c5ce5ae4ea038561cf3b3
+postprocessor	add_channel_icons   0.3	a4d3d745dfcbd02fdba7c979e7990f61efcc3206	1028b25e30378ecfd4e8ca3b5d9ef826aeba6381
+postprocessor   brownie_postprocess     0.34    67e4588db4987142f02f656db186367bd80c7c8c        fc862cadc95de513764fc4d307930300bac9bee2
+#postprocessor	the_movie_db_augment  1.0	48e20d775acf9efb58f4f48002f20aff54154808	feaac994c23554098639494a62c8483bcd91e594
+postprocessor   tmdb_augment_data       0.07    34d7c122226fae9cec9a6283ae509e2e58baf9a9        3650c56484b41d7a27ea257a9ff77cbcc9dda97e
+END
