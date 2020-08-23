@@ -1,0 +1,981 @@
+#!/usr/bin/env perl
+
+# TMDb XMLTV data augmenter  <ltd@interlink.com.au>
+#
+#  * to be used as a postprocessor for XMLTV data
+#  * uses The Movie Database (www.themoviedb.org) to augment TV guide data;
+#    contacts www.themoviedb.org to collect actual movie details
+#  * this should only be used for non-commercial use.
+#    please follow the TMDb terms and conditions.
+#  * can be used in conjunction with 'shepherd' XMLTV reconciler or standalone
+#    (pipe-through)
+#  * no configuration necessary
+#
+#  based roughly on a few existing IMDB XMLTV modules and IMDB CPAN modules
+#  but doesn't actually use them due to the large number of interdependencies
+#  they drag in.
+#     much credit goes to Michael Stepanov for his excellent IMDB::Film module
+#     and the regex's used to match data from IMDb pages
+#
+#  changelog:
+#    0.01 18dec17 stevenb
+
+use strict;
+use warnings;
+
+my $progname = "tmdb_augment_data";
+my $version = "0.09";
+
+use XMLTV;
+use POSIX qw(strftime mktime);
+use Getopt::Long;
+use HTML::TokeParser;
+use Data::Dumper;
+use HTML::TreeBuilder;
+use Shepherd::Common;
+use Data::Dump qw(dump);
+use TMDB;
+#
+# some initial cruft
+#
+
+my $script_start_time = time;
+my %stats;
+my $data_cache;
+my $settings_override = { };
+
+
+$| = 1;
+
+#
+# parse command line
+#
+
+my $opt = { };
+$opt->{output_file} =		"output.xmltv";
+$opt->{cache_file} =		"tmdb_augment_data.storable.cache";
+$opt->{lang} = 			"en";
+$opt->{debug} =			1;
+$opt->{min_duration} =		70;	# 65 mins
+$opt->{max_duration} =		300;	# 5 hours
+$opt->{skip_categories} = 	"Infotainment,Shopping,Business and Finance,Game Show,News,Parliament,Current Affairs,sports,Sport,Weather,Reality,live";
+$opt->{cache_details_for} =	120;	# cache movie details for 4 months
+$opt->{cache_title_for} = 	120;	# cache title lookups for 4 months
+$opt->{dont_augment_desc} =	0;	# from 2008/04/15
+
+GetOptions(
+	'region=i'		=> \$opt->{region},		# ignored
+	'days=i'		=> \$opt->{days},		# ignored
+	'offset=i'		=> \$opt->{offset},		# ignored
+	'timezone=s'		=> \$opt->{timezone},		# ignored
+	'channels_file=s' 	=> \$opt->{channels_file},	# ignored
+	'config-file=s'		=> \$opt->{configfile},		# ignored
+
+	'min_duration=i' 	=> \$opt->{min_duration},
+	'max_duration=i' 	=> \$opt->{max_duration},
+	'skip_categories=s'	=> \$opt->{skip_categories},
+	'cache_details_for=i' 	=> \$opt->{cache_details_for},
+	'cache_title_for=i' 	=> \$opt->{cache_title_for},
+	'long-info'             => \$opt->{long_info},
+	'dont-augment-desc=i' 	=> \$opt->{dont_augment_desc},
+	'apikey=s' 		=> \$opt->{apikey},
+
+	'output=s'		=> \$opt->{output_file},
+	'cache-file=s'		=> \$opt->{cache_file},
+	'fast'			=> \$opt->{fast},
+	'no-cache'		=> \$opt->{no_cache},
+	'debug+'		=> \$opt->{debug},
+	'lang=s'		=> \$opt->{lang},
+	'no-retry'		=> \$opt->{dont_retry},
+	'help'			=> \$opt->{help},
+	'test=s'		=> \$opt->{test},
+	'simpletest=s'		=> \$opt->{simpletest},
+	'set=s'			=> \$opt->{set},
+	'verbose'		=> \$opt->{help},
+	'version'		=> \$opt->{version},
+	'ready'			=> \$opt->{ready},
+	'desc'			=> \$opt->{desc},
+	'v'			=> \$opt->{version});
+
+printf "%s v%s\n",$progname,$version;
+
+if ($opt->{version} || $opt->{desc} || $opt->{help} || $opt->{ready} ||
+    $opt->{output_file} eq "") {
+	printf "Augments XMLTV data with programme information from ".
+	  "The Internet Movie Database (www.themoviedb.org)\n" if $opt->{desc};
+
+	printf "$progname is ready for operation.\n" if ($opt->{ready});
+
+	printf "No --output file specified.\n" if ($opt->{output_file} eq "");
+
+	if ($opt->{help} || $opt->{output_file} eq "") {
+		print<<EOF
+
+usage: $0 [options] {FILE(s)}
+
+Supported options include:
+  --min_duration={min} ignore programs under {min} duration (default: $opt->{min_duration} min)
+  --max_duration={min} ignore programs over {min} duration (default: $opt->{max_duration} min)
+  --skip_categories={list} don't try to look up programmes in these categories (default: $opt->{skip_categories})
+
+  --dont-augment-desc=1/0 (don't / do)
+                       don't add any TMDb data to programme description,
+                       only update the data fields (default: 1 or don't)
+  --long-info          add lots of TMDb data to description (default: don't)
+
+  --cache_details_for={days}  cache programme details for {days} (def: $opt->{cache_details_for} days)
+  --cache_title_for={days}    cache TMDb URLs for {days} (def: $opt->{cache_title_for} days)
+
+  --lang={lang}        set language to {lang} (default: $opt->{lang})
+  --output={file}      send final XMLTV output to {file} (default: $opt->{output_file})
+  --debug              enable debugging
+  --fast               don't pause between requests to www.themoviedb.org
+
+  --cache-file={file}  local file to use as our data cache (default: $opt->{cache_file})
+  --no-cache           don't use local cache to reduce network load on www.themoviedb.org
+  --no-retry           don't retry failed HTTP requests
+
+  --apikey=(string)    tmdb.com API key (string)
+
+  --test=(string)      operate in 'test mode', look up prog named (string)
+
+  --set=(setting):(value) save setting override: (value) 1=enable, 0=disable
+        dont-augment-desc:1/0 (don't / do)
+	long-info:1/0 (yes / no)
+
+EOF
+;
+	}
+	exit(0);
+}
+
+&run_test if (defined $opt->{test});
+&set_settings if (defined $opt->{set});
+
+# set defaults
+Shepherd::Common::set_default("debug", ((defined $opt->{debug} && $opt->{debug} > 0) ? 2 : 0));
+Shepherd::Common::set_default("stats", \%stats);
+Shepherd::Common::set_default("retry_delay", 10);
+Shepherd::Common::set_default("delay", int(rand(4) + 3)) unless (defined $opt->{fast});
+Shepherd::Common::set_default('fake' => 0);
+
+# go go go!
+
+Shepherd::Common::log(sprintf "started: cache %s, %s%soutput %s",
+	($opt->{no_cache} ? "disabled" : "enabled"),
+	($opt->{fast} ? "fast-override, " : ""),
+	($opt->{debug} ? "debug enabled, " : ""),
+	($opt->{output_file}));
+
+&read_cache unless ($opt->{no_cache});
+
+die "No API Key, please set an api key with ./shepherd --component-set tvdb_augment_data:apikey=apikeyhere"
+   if (! defined $opt->{apikey});
+
+my $tmdb = TMDB->new( apikey => $opt->{apikey} );
+
+
+my %writer_args = ( encoding => 'ISO-8859-1' );
+my $fh = new IO::File(">".$opt->{output_file}) ||
+  die "can't open $opt->{output_file} for writing: $!";
+$writer_args{OUTPUT} = $fh;
+
+my $writer = new XMLTV::Writer(%writer_args);
+$writer->start( {
+	'source-info-url' => "http://www.themoviedb.org",
+	'source-info-name' => "$progname $version",
+	'generator-info-name' => "$progname $version"} );
+
+foreach my $file (@ARGV) {
+	Shepherd::Common::log((sprintf "Parsing: %s",
+		($file eq "-" ? "(from-stdin, hit control-D to finiah)" : $file)));
+	XMLTV::parsefiles_callback(\&encoding_cb, \&credits_cb,
+		\&channel_cb,\&programme_cb, $file);
+}
+
+$writer->end();
+Shepherd::Common::log("Finished parsing, output in $opt->{output_file}");
+
+&write_cache unless ($opt->{no_cache});
+
+Shepherd::Common::print_stats($progname, $version, $script_start_time, %stats);
+
+exit(0);
+
+##############################################################################
+
+sub set_settings
+{
+	&read_cache;
+	my ($setting, $val) = split(/:/,$opt->{set});
+
+	die "--set format is (setting):(value) where value is 0 for disable, 1 for enable.\n"
+	  if ((!defined $val) || (($val ne "0") && ($val ne "1")));
+
+	die "unknown '--set' parameter '$setting', see --help for details.\n"
+	  if ($setting ne "dont-augment-desc" and $setting ne "long-info");
+
+	printf "%s: override parameter %s: %s\n", $progname, $setting, ($val eq "0" ? "disabled" : "enabled");
+
+	$setting =~ s/-/_/g;
+	$settings_override->{$setting} = $val;
+	&write_cache;
+	exit(0);
+}
+
+##############################################################################
+# populate cache
+
+sub read_cache
+{
+	my $store = Shepherd::Common::read_cache(\$opt->{cache_file});
+	
+	if ($store) {
+		$data_cache = $store->{data_cache};
+		$settings_override = $store->{settings_override};
+
+		foreach my $setting (keys %$settings_override) {
+			if ($settings_override->{$setting} eq "0") {
+				printf "using override parameter %s: %s\n", $setting,
+						($settings_override->{$setting} eq "0" ? "disabled" : "enabled");
+				$opt->{$setting} = 0;
+			}
+		}
+	
+		#
+		# age our caches on startup
+		#
+		my $max_age;
+		
+		# age our programme_id cache on startup
+		my $prog_id = $data_cache->{movie_id_lookup};
+		$max_age = time - ($opt->{cache_title_for} * 86400);
+		foreach my $key (keys %{$prog_id}) {
+			if ($data_cache->{movie_id_lookup}->{$key}->{last_fetched} < $max_age) {
+			delete $data_cache->{movie_id_lookup}->{$key};
+			$stats{removed_programme_id_from_cache}++
+			}
+		}
+		
+		# age our programme cache on startup
+		my $prog = $data_cache->{movie_lookup};
+		$max_age = time - ($opt->{cache_details_for} * 86400);
+		foreach my $key (keys %{$prog}) {
+			if (($data_cache->{movie_lookup}->{$key}->{last_fetched} < $max_age) ||
+				(($data_cache->{movie_lookup}->{$key}->{last_fetched} > 1208908800) && # 2008/04/23
+				($data_cache->{movie_lookup}->{$key}->{last_fetched} < 1209772800))){  # 2008/05/03
+			delete $data_cache->{movie_lookup}->{$key};
+			$stats{removed_programme_from_cache}++
+			}
+		}
+	}
+}
+
+##############################################################################
+# write out updated cache
+
+sub write_cache
+{
+	my $store;
+	$store->{data_cache} = $data_cache;
+	$store->{settings_override} = $settings_override;
+	Shepherd::Common::write_cache($opt->{cache_file}, $store);
+}
+
+##############################################################################
+# use the online TMDb "search" to find match
+
+sub search_tmdb_online
+{
+	my ($tmdb, $title, $post_fields, $movie_year, $prog_duration) = @_;
+
+	if ($stats{failed_online_tmdb_lookup} and $stats{failed_online_tmdb_lookup} >= 3) {
+		Shepherd::Common::log("too many failed lookups to online TMDb search for '$title' with $post_fields");
+		return;
+	}
+
+	Shepherd::Common::log("  online TMDb search for '$title' with $post_fields");
+
+	my @results = $tmdb->search->movie($title);
+	$data_cache->{movie_id_lookup}->{$post_fields}->{last_fetched} = time;
+	my $urls_found = 0;
+	my %urls;
+	foreach my $result (@results) {
+		next unless ($result->{title} =~ /^$title$/i || $result->{original_title} =~ /^$title$/i);
+		my $found_year = 0;
+		#print(dump($result));
+		#print("Release Date: ".$result->{release_date}."\n");
+		if ($result->{release_date} =~ /^((19|20)\d\d)/) {
+			$found_year = $1;
+		}
+		#print ("Movie year: ".dump($movie_year)." Found Year: ".dump($found_year)."\n");
+		if (!$movie_year || !$found_year || ( abs($movie_year - $found_year) <= 1) ) {
+			$urls{$result->{id}}++;
+			$urls_found++ if ($urls{$result->{id}} == 1);
+		}
+		printf( "%s:\t%s (%s)\n",
+			$result->{id}, $result->{title},
+			split( /-/, $result->{release_date}, 1 ) );
+	}
+
+	if ($urls_found < 1) {
+		foreach my $result (@results) {
+			#print (dump($result));
+			my $movie = $tmdb->movie( id => $result->{id});
+			my $found_title = 0;
+			foreach my $aka (@{$movie->alternative_titles}) {
+				#print (dump($aka));
+				if ($aka =~ /^$title$/i) {
+					$found_title = 1;
+				}
+			}
+			next unless ($found_title);
+			my $found_year = 0;
+			if ($result->{release_date} =~ /^\(\d\d\d\d\)/) {
+				$found_year = $1;
+			}
+			if (!$movie_year || !$found_year || ( abs($movie_year - $found_year) <= 1) ) {
+				$urls{$result->{id}}++;
+				$urls_found++ if ($urls{$result->{id}} == 1);
+			}
+			printf( "%s:\t%s (%s)\n",
+				$result->{id}, $result->{title},
+				split( /-/, $result->{release_date}, 1 ) );
+		}
+
+
+	}
+#			$showname = "$1, The" if ($showname =~ /^The (.*)/i);	# format to match search results
+#			print ("Text: ".$text." Showname: ".$showname." Title: ".$title." Found Year: $found_year\n");
+#			next unless ($text =~ /^$title \(((19|20)\d\d)\)$/i); # ignore partial & approximate matches
+#			next unless ($text =~ /^$title$/i); # ignore partial & approximate matches
+#			my $found_year = 1;
+#			print ("Found.\n");
+#			if (!$movie_year || !$found_year || (abs($movie_year - $found_year) <= 1) ) {
+#				$urls{$url}++; # store as a hash since tmdb sometimes gives dups
+#				$urls_found++ if ($urls{$url} == 1);
+#			}
+#		}
+#	}
+
+	# only insert into cache if we match exactly _1_ movie
+	if ($urls_found == 1) {
+		my $this_url = (keys %urls)[0];
+		$data_cache->{movie_id_lookup}->{$post_fields}->{id} = $this_url;
+		$stats{tmdb_lookup_added_positive_cache_entry}++;
+	} else {
+		Shepherd::Common::log("    online search failed: wanted 1 match, got $urls_found matches.");
+		# negatively cache our failed lookup
+		$data_cache->{movie_id_lookup}->{$post_fields}->{id} = "-";
+		$data_cache->{movie_id_lookup}->{$post_fields}->{num_choices} =
+		  $urls_found;
+	}
+}
+
+##############################################################################
+# perform a detailed movie lookup given a movie url
+# store what we find in our data cache
+
+sub get_tmdb_movie_online
+{
+	my ($tmdb, $movie_title, $movie_id) = @_;
+
+	if ($stats{failed_online_tmdb_lookup} and $stats{failed_online_tmdb_lookup} >= 3) {
+		Shepherd::Common::log("too many failed lookups to downloading online TMDb movie data for '$movie_title'");
+		return;
+	}
+
+	Shepherd::Common::log("  downloading online TMDb movie data for '$movie_title'");
+
+	if (!$movie_id) {
+		$stats{failed_online_tmdb_lookup}++;
+		Shepherd::Common::log("failed to fetch tmdb movie data from $movie_id");
+		return;
+	}
+
+	print ("Movie ID: ".$movie_id."\n");
+	my $movie = $tmdb->movie( id => $movie_id );
+
+	print (dump($movie->info));
+
+	if (!$movie) {
+		$stats{failed_online_tmdb_lookup}++;
+		Shepherd::Common::log("failed to fetch tmdb movie data from $movie_id");
+		return;
+	}
+
+
+	$stats{tmdb_movie_added_cache_entry}++;
+	$data_cache->{movie_lookup}->{$movie_id}->{last_fetched} = time;
+
+
+	$data_cache->{movie_lookup}->{$movie_id}->{title} = $movie->title;
+        $data_cache->{movie_lookup}->{$movie_id}->{year} = $movie->year;
+	$data_cache->{movie_lookup}->{$movie_id}->{cover} = "http://image.tmdb.org/t/p/w200".$movie->info->{poster_path};
+	my @crew = $movie->crew;
+	foreach my $crew_member (@crew) {
+		if ($crew_member->{job} =~ /^Director$/) {
+			push(@{$data_cache->{movie_lookup}->{$movie_id}->{directors}}, [$crew_member->{name}, $crew_member->{id}]);
+		}
+		if ($crew_member->{job} =~ /^Writer$/ || $crew_member->{job} =~ /^Screenplay$/) {
+			push(@{$data_cache->{movie_lookup}->{$movie_id}->{writers}}, [$crew_member->{name}, $crew_member->{id}]);
+		}
+#		print("Name: ".$crew_member->{name}." Job: ".$crew_member->{job}."\n");
+	}
+	my @cast = $movie->cast;
+	foreach my $cast_member (@cast) {
+#		if ($cast_member->{order} < 6) {
+			push(@{$data_cache->{movie_lookup}->{$movie_id}->{cast}}, [$cast_member->{name}, $cast_member->{character}]);
+#		}
+#		print(dump($cast_member));
+#		print("Name: ".$crew_member->{name}." Job: ".$crew_member->{job}."\n");
+	}
+
+	
+	#
+	# parse countries, languages, genres using generic list parser
+	#
+	foreach my $country (@{$movie->info->{production_countries}}) {
+#		print(dump($country));
+		push(@{$data_cache->{movie_lookup}->{$movie_id}->{countries}}, $country->{name});
+	}
+	foreach my $language (@{$movie->info->{spoken_languages}}) {
+#		print(dump($language));
+		push(@{$data_cache->{movie_lookup}->{$movie_id}->{languages}}, $language->{name});
+	}
+	foreach my $genre (@{$movie->info->{genres}}) {
+#		print(dump($genre));
+		push(@{$data_cache->{movie_lookup}->{$movie_id}->{genres}}, $genre->{name});
+	}
+
+	#
+	# parse tagline, plot, rating, runtime, aka, trivia, goofs,
+	# awards and summary using generic scalar handler
+	#
+	$data_cache->{movie_lookup}->{$movie_id}->{tagline} = $movie->tagline;
+	$data_cache->{movie_lookup}->{$movie_id}->{summary} = $movie->overview;
+	$data_cache->{movie_lookup}->{$movie_id}->{rating} = $movie->info->{vote_average}."/10";
+	$data_cache->{movie_lookup}->{$movie_id}->{rating_votes} = $movie->info->{vote_count};
+	$data_cache->{movie_lookup}->{$movie_id}->{runtime} = $movie->info->{runtime};
+	$data_cache->{movie_lookup}->{$movie_id}->{aka} = $movie->alternative_titles;
+
+#	&tmdb_scalar_parser($html_data, "h5", "plot","trimmed","h5","a", undef, \$data_cache->{movie_lookup}->{$movie_id}->{plot});
+#	&tmdb_scalar_parser($html_data, "h5", "trivia","trimmed","h5","a", undef, \$data_cache->{movie_lookup}->{$movie_id}->{trivia});
+#	&tmdb_scalar_parser($html_data, "h5", "goofs","trimmed","h5","a", undef, \$data_cache->{movie_lookup}->{$movie_id}->{goofs});
+#	&tmdb_scalar_parser($html_data, "h5", "awards","trimmed","h5","a", undef, \$data_cache->{movie_lookup}->{$movie_id}->{awards});
+#	&tmdb_scalar_parser($html_data, "h5", "original air date","trimmed","h5","a", undef, \$data_cache->{movie_lookup}->{$movie_id}->{airdate});
+
+#	print(dump($data_cache->{movie_lookup}->{$movie_id}));
+#	print("\n\n");
+
+	# write out the cache every 15 progs or so
+	&write_cache if ((($stats{tmdb_movie_added_cache_entry} % 15) == 0) && (!defined $opt->{no_cache}));
+}
+
+##############################################################################
+
+sub encoding_cb( $ )
+{
+	my $e = shift;
+	# printf "got encoding ".Dumper($e);
+}
+	
+##############################################################################
+
+sub credits_cb( $ )
+{
+	my $c = shift;
+	# printf "got credits ".Dumper($c);
+}
+
+##############################################################################
+
+sub channel_cb( $ )
+{
+	my $c = shift;
+	# printf "got channel ".Dumper($c);
+	$writer->write_channel($c);
+}
+
+##############################################################################
+
+sub programme_cb( $ )
+{
+	my $prog=shift;
+	$stats{programmes}++;
+
+	my $movie_title = $prog->{title}->[0]->[0]
+	  if (($prog->{title}) && ($prog->{title}->[0]) &&
+	      ($prog->{title}->[0]->[0]));
+	my $movie_subtitle = $prog->{'sub-title'}->[0]->[0]
+		if (($prog->{'sub-title'}) && ($prog->{'sub-title'}->[0]) &&
+			($prog->{'sub-title'}->[0]->[0]));
+	my $movie_year = $prog->{date} if ($prog->{date});
+
+	if (($movie_title =~ /^close$/i) || ($movie_title =~ /^station close$/i)) {
+		$stats{skipped_due_to_category}++;
+		goto END;
+	}
+
+	if (defined $prog->{category}) {
+		foreach my $prog_category (@{($prog->{category})}) {
+			foreach my $prog_cat2 (@$prog_category) {
+				foreach my $skip_category (split(/,/,$opt->{skip_categories})) {
+					if (lc($prog_cat2) eq lc($skip_category)) {
+						$stats{skipped_due_to_category}++;
+						goto END;
+					}
+				}
+			}
+		}
+	}
+
+	# print "got programme ".Dumper($prog);
+
+	#
+	# only lookup if  min_duration < prog_duration > min_duration
+	#
+	my $t1 = Shepherd::Common::parse_xmltv_date($prog->{start});
+	my $t2 = Shepherd::Common::parse_xmltv_date($prog->{stop});
+	if ((!$t1) || (!$t2)) {
+		$stats{excluded_couldnt_parse_time}++;
+		goto END;
+	}
+	my $prog_duration = (($t2 - $t1) / 60);
+	if ($prog_duration < $opt->{min_duration}) {
+		$stats{excluded_prog_too_short}++;
+		goto END;
+	}
+	if ($prog_duration > $opt->{max_duration}) {
+		$stats{excluded_prog_too_long}++;
+		goto END;
+	}
+
+	$stats{included_for_tmdb_lookup}++;
+	#print (dump($prog));
+
+	#
+	# find movie url
+	# (either via a cached previous search or via TMDb "power search")
+	#
+	my @search_fields;
+	push(@search_fields, "title=".Shepherd::Common::urlify($movie_title));
+#	push(@search_fields, "&countries=".Shepherd::Common::urlify($prog->{country}->[0][0]))
+#	  if ((defined $prog->{country}) && (defined $prog->{country}->[0][0]));
+	push(@search_fields, "&year=".Shepherd::Common::urlify($prog->{date}))
+	  if ((defined $prog->{date}) && ($prog->{date} > 0));
+#	push(@search_fields, "&language=".Shepherd::Common::urlify($prog->{language}->[0] =~ /(^[^,]*)/))
+#	  if ((defined $prog->{language}) && (defined $prog->{language}->[0]));
+	# &exact=y
+	# cast/crew
+
+	Shepherd::Common::log("programme ".$stats{programmes}.": \"$movie_title\" ($prog_duration minutes)");
+
+	# first search using everything we can...
+	my $orig_post_fields = join("",@search_fields);
+	my $post_fields;
+	my $found = 0;
+	while ((scalar(@search_fields) > 0) && (!$found)) {
+		if ($movie_subtitle) {
+		        $post_fields = "title=".Shepherd::Common::urlify($movie_title." ".$movie_subtitle);
+			$orig_post_fields = $post_fields;
+			push(@search_fields, $post_fields);
+		} else {
+			$post_fields = join("",@search_fields);
+		}
+
+		#
+		# first check if we have a previos cache entry for this
+		#
+		if (defined $data_cache->{movie_id_lookup}->{$post_fields} and
+				defined $data_cache->{movie_id_lookup}->{$post_fields}->{id}) {
+			if ($data_cache->{movie_id_lookup}->{$post_fields}->{id} eq "-") {
+				# negatively cached
+				$stats{tmdb_lookup_used_negative_cache_entry}++;
+				undef $movie_subtitle;
+				pop(@search_fields);
+			} else {
+				# positive cache
+				$stats{tmdb_lookup_used_cache_entry}++;
+				$found = 1;
+			}
+			Shepherd::Common::log("  used (".($found ? "positive" : "negative")." cache) search: $post_fields");
+		} else {
+			#
+			# no cache, go look it up
+			#
+			&search_tmdb_online($tmdb, $movie_title, $post_fields, $movie_year, $prog_duration);
+
+			# TMDb web site failed/returned unexpected result, just skip rest
+			goto END
+			  if (!defined $data_cache->{movie_id_lookup}->{$post_fields} or
+					!defined $data_cache->{movie_id_lookup}->{$post_fields}->{id});
+
+			if ($data_cache->{movie_id_lookup}->{$post_fields}->{id} eq "-") {
+				# lookup failed.
+
+				# if it returned no hits, perhaps our search was too specific.
+				# make it less specific if we can
+				if ($data_cache->{movie_id_lookup}->{$post_fields}->{num_choices} == 0) {
+					undef $movie_subtitle;
+					pop(@search_fields);
+				} else {
+					# search wasn't specific enough.  (more than 1 hit)
+
+					if ($movie_subtitle) {
+						# try again if subtitle in search
+						undef $movie_subtitle;
+						pop(@search_fields);
+					} else {
+						# skip ahead to simple search
+						# fill in less detailed searches or we fetch them next time
+						pop(@search_fields);
+						while (scalar(@search_fields) > 0) {
+							$post_fields = join("",@search_fields);
+							$data_cache->{movie_id_lookup}->{$post_fields}->{last_fetched} = time;
+							$data_cache->{movie_id_lookup}->{$post_fields}->{id} = '-';
+							$data_cache->{movie_id_lookup}->{$post_fields}->{num_choices} = 1000;
+							pop(@search_fields);
+						}
+					}
+				}
+			} else {
+				# lookup succeeded
+				$found = 1;
+			}
+		}
+	}
+
+	goto END if (!$found);
+
+	$data_cache->{movie_id_lookup}->{$orig_post_fields}->{id} = $data_cache->{movie_id_lookup}->{$post_fields}->{id}
+			if ($post_fields ne $orig_post_fields);
+
+	my $movie_id = $data_cache->{movie_id_lookup}->{$post_fields}->{id};
+
+	# no match or negative cache match - bail out
+	goto END if ((!defined $movie_id) || ($movie_id eq "-"));
+
+	#
+	# lookup movie details
+	# (either via previously cached entry or via an online TMDb lookup)
+	#
+
+	if (defined $data_cache->{movie_lookup}->{$movie_id}) {
+		$stats{tmdb_movie_used_cache_entry}++;
+		Shepherd::Common::log("  used existing (cached) movie details: $movie_id");
+	} else {
+		&get_tmdb_movie_online($tmdb, $movie_title,$movie_id);
+		goto END if (!defined $data_cache->{movie_lookup}->{$movie_id});
+		$stats{tmdb_movie_added_cache_entry}++;
+	}
+
+
+	#
+	# augment data
+	#
+
+	$data_cache->{movie_lookup}->{$movie_id}->{last_lookup} = time;
+	$data_cache->{movie_lookup}->{$movie_id}->{num_lookups}++;
+	goto END if (!defined $data_cache->{movie_lookup}->{$movie_id}->{title});
+	my $tmdb_movie = $data_cache->{movie_lookup}->{$movie_id};
+	$stats{added_tmdb_data}++;
+
+	if ($opt->{dont_augment_desc}) {
+
+		# if not a reasonable description, add anything we've got
+		if (!defined $prog->{desc} || !defined $prog->{desc}->[0] || !defined $prog->{desc}->[0]->[0] ||
+				 (length ($prog->{desc}->[0]->[0]) <= 20)) {
+			my $tmdb_desc = '';
+
+			$tmdb_desc .= $tmdb_movie->{tagline}."\n" if ($tmdb_movie->{tagline});
+			$tmdb_desc .= $tmdb_movie->{summary}."\n" if ($tmdb_movie->{summary});
+			$tmdb_desc .= $tmdb_movie->{plot} if ($tmdb_movie->{plot});
+
+			if ($tmdb_desc ne '') {
+				chomp $tmdb_desc;
+				$prog->{desc}->[0]->[0] = "" if (!defined $prog->{desc}->[0]->[0]);
+				$prog->{desc}->[0]->[0] .= "\n" if ($prog->{desc}->[0]->[0] ne "");
+				$prog->{desc}->[0]->[0] .= $tmdb_desc;
+			}
+		}
+	} else {
+		my $tmdb_desc = '';
+
+		# Unless we request --long-info, only add
+		# Tagline, Awards, and Trivia to the description.
+		# (Other data goes in appropriate fields.)
+
+		if ($opt->{long_info}) {
+		    $tmdb_desc .= sprintf " Title: %s",$tmdb_movie->{title};
+		    $tmdb_desc .= sprintf "  (%s)",$tmdb_movie->{year}
+			if (($tmdb_movie->{year}) && ($tmdb_movie->{year} > 0));
+		    $tmdb_desc .= "\n";
+
+		    $tmdb_desc .= sprintf " aka: %s\n",$tmdb_movie->{aka}
+			if (defined $tmdb_movie->{aka} && $tmdb_movie->{aka} ne "");
+		}
+
+		$tmdb_desc .= sprintf " Tagline: %s\n",$tmdb_movie->{tagline}
+		    if (defined $tmdb_movie->{tagline} && $tmdb_movie->{tagline} ne "");
+		
+		if ($opt->{long_info} || !defined $prog->{desc} || !defined $prog->{desc}->[0] ||
+				!defined $prog->{desc}->[0]->[0] || (length ($prog->{desc}->[0]->[0]) <= 20)) {
+		    $tmdb_desc .= sprintf " Summary: %s\n",$tmdb_movie->{summary}
+			if (defined $tmdb_movie->{summary} && $tmdb_movie->{summary} ne "");
+
+		    $tmdb_desc .= sprintf " Plot: %s\n",$tmdb_movie->{plot}
+			if (defined $tmdb_movie->{plot} && $tmdb_movie->{plot} ne "");
+		}
+
+		if ($opt->{long_info}) {
+		    $tmdb_desc .= sprintf " Rating: %s\n",$tmdb_movie->{rating}
+			if (defined $tmdb_movie->{rating} && $tmdb_movie->{rating} =~ /^\d+/);
+		}
+
+		$tmdb_desc .= sprintf " Original Air Date: %s\n",$tmdb_movie->{airdate}
+		    if (defined $tmdb_movie->{airdate} && $tmdb_movie->{airdate} ne "");
+
+		$tmdb_desc .= sprintf " Awards: %s\n",$tmdb_movie->{awards}
+		    if (defined $tmdb_movie->{awards} && $tmdb_movie->{awards} ne "");
+
+		$tmdb_desc .= sprintf " Trivia: %s\n",$tmdb_movie->{trivia}
+		    if (defined $tmdb_movie->{trivia} && $tmdb_movie->{trivia} ne "");
+		
+		if ($opt->{long_info}) {
+		    $tmdb_desc .= sprintf " Certifications: %s\n", join(', ', 
+			map { sprintf "%s (%s)", $tmdb_movie->{certifications}->{$_}, $_ } sort keys  %{$tmdb_movie->{certifications}})
+			    if (defined $tmdb_movie->{certifications});
+
+		    $tmdb_desc .= sprintf " Cast: %s\n", join(', ',
+			(ref $tmdb_movie->{cast} eq "ARRAY" ?
+			    map { sprintf "%s%s", @$_[0], (@$_[1] ? " as @$_[1]" : '') } @{$tmdb_movie->{cast}} :
+			    map { sprintf "%s%s", $_, ($tmdb_movie->{cast}->{$_} ? " as " . $tmdb_movie->{cast}->{$_} : '') } keys %{$tmdb_movie->{cast}}))
+				if (defined $tmdb_movie->{cast});
+
+		    $tmdb_desc .= sprintf " Directors: %s\n",
+			join(", ", ref($tmdb_movie->{directors}) eq "ARRAY" ?
+			    map(@$_[0], @{$tmdb_movie->{directors}}) : sort keys %{$tmdb_movie->{directors}})
+				if ($tmdb_movie->{directors});
+		    $tmdb_desc .= sprintf " Writers: %s\n",
+			join(", ", ref($tmdb_movie->{writers}) eq "ARRAY" ?
+			    map(@$_[0], @{$tmdb_movie->{writers}}) : sort keys %{$tmdb_movie->{writers}})
+				if ($tmdb_movie->{writers});
+
+		    $tmdb_desc .= sprintf " Runtime: %s\n",$tmdb_movie->{runtime}
+			if (defined $tmdb_movie->{runtime} && $tmdb_movie->{runtime} ne "");
+		    $tmdb_desc .= sprintf " Countries: %s\n",
+			join(", ",@{$tmdb_movie->{countries}})
+			    if (defined $tmdb_movie->{countries});
+		    $tmdb_desc .= sprintf " Languages: %s\n",
+			join(", ",@{$tmdb_movie->{languages}})
+			    if (defined $tmdb_movie->{languages});
+		    $tmdb_desc .= sprintf " Genres: %s\n",
+			join(", ",@{$tmdb_movie->{genres}})
+			    if (defined $tmdb_movie->{genres});
+
+		    $tmdb_desc .= sprintf " Goofs: %s\n",$tmdb_movie->{goofs}
+			if (defined $tmdb_movie->{goofs} && $tmdb_movie->{goofs} ne "");
+		    $tmdb_desc .= sprintf " Cover: %s\n",$tmdb_movie->{cover}
+			if (defined $tmdb_movie->{cover} && $tmdb_movie->{cover} ne "");
+		}
+
+		if ($tmdb_desc ne '') {
+		    chomp $tmdb_desc;
+		    if ($opt->{long_info}) {
+			$tmdb_desc = "TMDb augmented data:\n$tmdb_desc";
+		    } else {
+			$tmdb_desc = sprintf "(%s)", substr($tmdb_desc, 1);
+		    }
+		    $prog->{desc}->[0]->[0] = "" if (!defined $prog->{desc}->[0]->[0]);
+		    $prog->{desc}->[0]->[0] .= "\n\n" if ($prog->{desc}->[0]->[0] ne "");
+		    $prog->{desc}->[0]->[0] .= $tmdb_desc;
+		}
+	}
+
+	$prog->{date} = $tmdb_movie->{year} if ($tmdb_movie->{year} && !$prog->{date});
+	# $prog->{length} = $tmdb_movie->{runtime} if ($tmdb_movie->{runtime});
+
+	my $found_url = 0, my $found_cover = 0;
+	if (defined $prog->{url}) {
+		foreach my $url (@{($prog->{url})}) {
+			$found_url++ if (lc($url) eq lc("http://www.themoviedb.org/movie/".$movie_id));
+			$found_cover++ if (($tmdb_movie->{cover}) && (lc($url) eq lc($tmdb_movie->{cover})));
+		}
+	}
+	push (@{($prog->{url})},"http://www.themoviedb.org/movie/".$movie_id) if (!$found_url);
+	push (@{($prog->{url})},$tmdb_movie->{cover}) if (($tmdb_movie->{cover}) && (!$found_cover));
+
+	# quick hack by Max to get working again, March 2012.
+	if ($tmdb_movie->{rating} && $tmdb_movie->{rating_votes} > 100) {
+#	        $prog->{'star-rating'} = [ ] unless (ref $prog->{'star-rating'});
+	        $prog->{'star-rating'} = [ ];
+		push @{$prog->{'star-rating'}}, [ $tmdb_movie->{rating}, "themoviedb.org", undef ];
+
+#		my ($rating,$votes) = split(/ /,$tmdb_movie->{rating});
+#		if ($rating =~ /[\d\.\s]+\/[\d\.\s]+/) {
+#			# If there's already a star-rating, average the scores
+#			if (ref $prog->{'star-rating'} && $prog->{'star-rating'}->[0] =~ /[\d\.\s]+\/[\d\.\s]+/) {
+#				$rating = sprintf "%.1f/10", (eval($rating) + eval($prog->{'star-rating'}->[0])) * 5;
+#			}
+#			$prog->{'star-rating'} = [ $rating ];
+#		}
+	}
+
+	if ($tmdb_movie->{languages}) {
+		foreach my $lang (@{($tmdb_movie->{languages})}) {
+			if (defined $prog->{language}) {
+				$prog->{language}->[0] .= ", " . $lang
+					if ($prog->{language}->[0] !~ /$lang/i);
+			} else {
+				$prog->{language}->[0] = $lang;
+			}
+		}
+	}
+	# don't fill in XMLTV orig-language - mythtv ignores it
+	#print ("\nBEFORE ARRAY: ".dump($prog->{category})."\n");
+	#print ("AFTER ARRAY: ".dump($prog->{category})."\n\n");
+        push(@{($prog->{category})},["movie","en"]);
+	my @grep_array = grep { $_->[0] ne 'series' } @{$prog->{category}};
+	@{$prog->{category}} = @grep_array;
+
+	if (defined $tmdb_movie->{genres}) {
+		#my @grep_array = grep { $_->[0] ne 'series' } @{$prog->{category}};
+		#@{$prog->{category}} = @grep_array;
+
+		foreach my $genre (@{($tmdb_movie->{genres})}) {
+			my $found_genre = 0;
+			foreach my $category (@{($prog->{category})}) {
+				$found_genre++ if (lc($genre) eq lc($category->[0]));
+			}
+			push(@{($prog->{category})},[$genre, "en"]) if (!$found_genre);
+		}
+	}
+	#print ("AFTER ARRAY2: ".dump($prog->{category})."\n\n");
+
+	if (defined $tmdb_movie->{countries}) {
+		foreach my $country (@{($tmdb_movie->{countries})}) {
+			my $found_country = 0;
+			foreach my $c (@{($prog->{country})}) {
+				$found_country++ if (lc($country) eq lc($c->[0]));
+			}
+			push(@{($prog->{country})},[$country]) if (!$found_country);
+		}
+	}
+
+	if (defined $tmdb_movie->{airdate})
+	{
+		my ($season) = ($tmdb_movie->{airdate} =~ /Season\s+(\d+)/i);
+		my ($episode) = ($tmdb_movie->{airdate} =~ /Episode\s+(\d+)/i);
+		if ($season || $episode) {
+			my $xmltv_ns = ($season ? ($season - 1) : "") ." . ". ($episode ? ($episode - 1) : "") ." . 0";
+			$prog->{'episode-num'} = [ [ $xmltv_ns, 'xmltv_ns' ] ];
+		}
+	}
+
+	if (defined $tmdb_movie->{certifications}) {
+		# put a useful rating first
+		my $useful_rating;
+		foreach my $country ('Australia', 'New Zealand', 'USA', 'UK', 'Canada', 'Ireland',
+				'Singapore', 'Philippines', 'Taiwan') {
+			if ($tmdb_movie->{certifications}->{$country} &&
+					$tmdb_movie->{certifications}->{$country} ne 'Unrated' &&
+					$tmdb_movie->{certifications}->{$country} ne 'Not Rated' &&
+					$tmdb_movie->{certifications}->{$country} ne 'Approved') {
+				push(@{($prog->{rating})},[$tmdb_movie->{certifications}->{$country},$country,undef]);
+				$useful_rating = 1;
+				last;
+			}
+		}
+
+		# only return everything if long_info or no useful rating found
+		if ($opt->{long_info} || !$useful_rating) {
+			foreach my $cert (sort keys %{($tmdb_movie->{certifications})}) {
+				my $found_cert = 0;
+				foreach my $c (@{($prog->{rating})}) {
+					$found_cert++ if (lc($cert) eq lc($c->[1]));
+				}
+				push(@{($prog->{rating})},[$tmdb_movie->{certifications}->{$cert},$cert,undef])
+						if (!$found_cert);
+			}
+		}
+	}
+
+	if (defined $tmdb_movie->{cast}) {
+		foreach my $cast (ref($tmdb_movie->{cast}) eq "ARRAY" ?
+				map(@$_[0], @{$tmdb_movie->{cast}}) : sort keys %{$tmdb_movie->{cast}}) {
+			my $found_cast = 0;
+			if ((defined $prog->{credits}) && (defined $prog->{credits}->{actor})) {
+				foreach my $a (@{($prog->{credits}->{actor})}) {
+					$found_cast++ if (lc($cast) eq lc($a));
+				}
+			}
+			push(@{($prog->{credits}->{actor})},$cast) if (!$found_cast);
+		}
+	}
+
+	if (defined $tmdb_movie->{writers}) {
+		foreach my $cast (ref($tmdb_movie->{writers}) eq "ARRAY" ?
+				map(@$_[0], @{$tmdb_movie->{writers}}) : sort keys %{$tmdb_movie->{writers}}) {
+			my $found_cast = 0;
+			if ((defined $prog->{credits}) && (defined $prog->{credits}->{writer})) {
+				foreach my $w (@{($prog->{credits}->{writer})}) {
+					$found_cast++ if (lc($cast) eq lc($w));
+				}
+			}
+			push(@{($prog->{credits}->{writer})},$cast) if (!$found_cast);
+		}
+	}
+
+	if (defined $tmdb_movie->{directors}) {
+		foreach my $cast (ref($tmdb_movie->{directors}) eq "ARRAY" ?
+				map(@$_[0], @{$tmdb_movie->{directors}}) : sort keys %{$tmdb_movie->{directors}}) {
+			my $found_cast = 0;
+			if ((defined $prog->{credits}) && (defined $prog->{credits}->{director})) {
+				foreach my $d (@{($prog->{credits}->{director})}) {
+					$found_cast++ if (lc($cast) eq lc($d));
+				}
+			}
+			push(@{($prog->{credits}->{director})},$cast) if (!$found_cast);
+		}
+	}
+
+	if (defined $tmdb_movie->{cover}) {
+		$found_cover = 0;
+		if (defined $prog->{icon}) {
+			foreach my $cover (@{($prog->{icon})}) {
+				$found_cover++ if (lc($cover->{src}) eq lc($tmdb_movie->{cover}));
+			}
+		}
+		$prog->{icon}->[0]->{src} = $tmdb_movie->{cover} if (!$found_cover);
+	}
+
+	Shepherd::Common::cleanup($prog);
+	#print "prog now ".Dumper($prog);
+END:
+	$writer->write_programme($prog);
+}
+
+##############################################################################
+
+sub run_test
+{
+	$opt->{debug} = 1;
+	$opt->{fast} = 1;
+	Shepherd::Common::log("running test for: ".$opt->{test});
+
+	my $post_fields = "title=".Shepherd::Common::urlify($opt->{test});
+	&search_tmdb_online($tmdb, $opt->{test},$post_fields);
+
+	die "lookup unsuccessful\n"
+	  if ((!defined $data_cache->{movie_id_lookup}->{$post_fields}) ||
+	      ($data_cache->{movie_id_lookup}->{$post_fields}->{id} eq "-"));
+
+	my $movie_id = $data_cache->{movie_id_lookup}->{$post_fields}->{id};
+	&get_tmdb_movie_online($tmdb, $opt->{test},$movie_id);
+	print "Movie details returned: ".Dumper($data_cache->{movie_lookup}->{$movie_id});
+
+	exit(0);
+}
+
+##############################################################################
