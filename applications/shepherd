@@ -1,7 +1,7 @@
 #!/usr/bin/env perl
 
 our $progname = 'shepherd';
-my $version = '1.9.13';
+my $version = '1.9.14';
 
 # tv_grab_au
 # "Shepherd"
@@ -35,7 +35,7 @@ use lib 'references';
 # --- required perl modules
 # ---------------------------------------------------------------------------
 
-our $standard_source_url = "https://raw.githubusercontent.com/ShephedProject/shepherd/release/";
+our $standard_source_url = "https://raw.githubusercontent.com/brownowski/shepherd/master/";
 our $wiki = 'https://github.com/ShephedProject/shepherd/wiki';
 
 &require_module("Cwd");
