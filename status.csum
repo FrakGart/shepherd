@@ -15,11 +15,11 @@ reference       TMDB.pm             1.2.1.1	ce7621b4295c50bb93cb79f088cc0107807c
 #grabber         freeview            1.0.7	7d314b49651d2545c9f6852fcf9ed800e9b2cb00	745b10b7c474aec346cf57a374b264b2b764e137
 grabber         tv_grab_dvb             0.03    ffabf5683ca2e2d884a661a59a6f77d9843016e6        19cbc881113a19bee13ece3fe7bfc93890c912cf
 #reconciler      reconciler_mk2      0.58	53c4c0647abf244d0b22e7620bf1247e37abf689	8f8ee5f905bf4e844b67a557baa2b0403fb263c4
-reconciler      reconciler_mk3          0.60    53c4c0647abf244d0b22e7620bf1247e37abf689        7d4114492a40976c68fea2713e4f5a57fd9ca5d2
+reconciler      reconciler_mk3          0.60    53c4c0647abf244d0b22e7620bf1247e37abf689        8494dead153d215264c5a552c081d73694c29b3c
 #postprocessor   metacritic          1.1	5e30f527c03bbddc31a2d649c5c5c50f63848c16	59fe1817de57012e3d449e807f3941ff9e683973
 postprocessor   augment_timezone    0.30	df61b40c0943bf7568442496081a4e90d9a30fed	8b8bf1be73c1d1f1d41c5ce5ae4ea038561cf3b3
 postprocessor	add_channel_icons   0.3	a4d3d745dfcbd02fdba7c979e7990f61efcc3206	1028b25e30378ecfd4e8ca3b5d9ef826aeba6381
 postprocessor   brownie_postprocess     0.34    67e4588db4987142f02f656db186367bd80c7c8c        fc862cadc95de513764fc4d307930300bac9bee2
 #postprocessor	the_movie_db_augment  1.0	48e20d775acf9efb58f4f48002f20aff54154808	feaac994c23554098639494a62c8483bcd91e594
-postprocessor   tmdb_augment_data       0.07    34d7c122226fae9cec9a6283ae509e2e58baf9a9        3650c56484b41d7a27ea257a9ff77cbcc9dda97e
+postprocessor   tmdb_augment_data       0.08    34d7c122226fae9cec9a6283ae509e2e58baf9a9        eadd95de21aef0e5a296f5c8d0979b08cab3dc41
 END
