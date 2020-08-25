@@ -3,11 +3,11 @@ reference       channel_list        148		98db7e8c3adfc08745e79d61b60a83dca2e797d
 reference       Shepherd/Common.pm  1.32	b8e59c9f7e4a13517eba974c40ba5745f3688e76	a5e3b89aa0f8e096328944bed0c9eab55e231e1d
 reference       Shepherd/MythTV.pm  0.42	85f83123706d06d99d896ee3d4767d6bdff71ca1	d5f6290d8b77d537f49f43d5167a54264b2599c7
 reference       Shepherd/Configure.pm   0.42	7666e8cf87e63ed27abac3c367c6862285db6028	4da919d2272647c4fae878fea86e2ee6fba665ea
-reference	    Shepherd/json_pp.pm 0.2	af7820870d7cdfd47a593929a14e06306e9fda7b	ce32f3b0dbfbc1664b69c97faa2639461d5d8c18
-reference		DateTimeFormat/XMLTV.pm		1.001	72dc2b212d733776e7f08a0e318ff5fea4e18b3a	c16512679b7051ae50ee025ea8e3225995a7e3ff
-reference		Shepherd/FreeviewHelper.pm	1.2	45a8ed942288d494668e48df2c5dbcc441125d84	9094efa4b235878975736c7c546bc6d081246e51
+reference	Shepherd/json_pp.pm	0.2	af7820870d7cdfd47a593929a14e06306e9fda7b	ce32f3b0dbfbc1664b69c97faa2639461d5d8c18
+reference	DateTimeFormat/XMLTV.pm	1.001	72dc2b212d733776e7f08a0e318ff5fea4e18b3a	c16512679b7051ae50ee025ea8e3225995a7e3ff
+reference	Shepherd/FreeviewHelper.pm	1.2	45a8ed942288d494668e48df2c5dbcc441125d84	9094efa4b235878975736c7c546bc6d081246e51
 reference       TMDB.pm             1.2.1.1	ce7621b4295c50bb93cb79f088cc0107807c1c0a	f49c6a479ae40bfa46ad64127b282a649fb6f314
-reference	TVDB/API.pm         0.33	a8aadd9e6a5c1e45643fdef7355c6b921c965161	48d5055e608c661265624e652846423a1513e0e5
+reference	TVDB/API.pm         0.34	a8aadd9e6a5c1e45643fdef7355c6b921c965161	10bcd801eec32fa8569084f3659a833221204711
 reference	Debug/Simple.pm     0.10	2f0964ddb6cf6a5bb3e4f5878b747058cca33a2c	e89c1d73e1bd941b9c58c76221a5ff145c1cf4dc
 #grabber         oztivo              2.64	00783671f4a4949e4b58ce7f8e6412be2c887ace	a7e799f10b7f3f707529b0ef1f906e72eb0d0528
 #grabber         sbsweb              5.05	a4e72ca0de3ace9220948171c3455a6a4b3be50b	ddee42fe50268e882edda7545d36016b3e3e766b
@@ -16,6 +16,7 @@ reference	Debug/Simple.pm     0.10	2f0964ddb6cf6a5bb3e4f5878b747058cca33a2c	e89c
 #grabber         abc_website         7.03	5b033781f567687e93c6cf785792bef96ac33125	31be91eb5ffdc65330e7b829f7a9194daa7f5a26
 #grabber         freeview            1.0.7	7d314b49651d2545c9f6852fcf9ed800e9b2cb00	745b10b7c474aec346cf57a374b264b2b764e137
 grabber         tv_grab_dvb             0.03    ffabf5683ca2e2d884a661a59a6f77d9843016e6        19cbc881113a19bee13ece3fe7bfc93890c912cf
+grabber         xmltv_net             0.01	b9a6a71d9e81be4671fd24ec6d12ad2e4b9f2212	4bc8c80dd8a5205b4f1df421857ecbc8e2f119b1
 #reconciler      reconciler_mk2      0.58	53c4c0647abf244d0b22e7620bf1247e37abf689	8f8ee5f905bf4e844b67a557baa2b0403fb263c4
 reconciler      reconciler_mk3          0.61    53c4c0647abf244d0b22e7620bf1247e37abf689        8494dead153d215264c5a552c081d73694c29b3c
 #postprocessor   metacritic          1.1	5e30f527c03bbddc31a2d649c5c5c50f63848c16	59fe1817de57012e3d449e807f3941ff9e683973
@@ -23,5 +24,5 @@ postprocessor   augment_timezone    0.30	df61b40c0943bf7568442496081a4e90d9a30fe
 postprocessor	add_channel_icons   0.21	a4d3d745dfcbd02fdba7c979e7990f61efcc3206	ee59ff0da71d64a79ef04bbacef6f53644aa780e
 postprocessor   brownie_postprocess     0.34    67e4588db4987142f02f656db186367bd80c7c8c        fc862cadc95de513764fc4d307930300bac9bee2
 #postprocessor	the_movie_db_augment  1.0	48e20d775acf9efb58f4f48002f20aff54154808	feaac994c23554098639494a62c8483bcd91e594
-postprocessor   tmdb_augment_data       0.09    34d7c122226fae9cec9a6283ae509e2e58baf9a9        d16bebd85390b874ba7f4a43098c0c869a0c4740
+postprocessor   tmdb_augment_data       0.10    34d7c122226fae9cec9a6283ae509e2e58baf9a9        7a02cf6bf0370e7007d8e4e83e7e79f94acf9e52
 END

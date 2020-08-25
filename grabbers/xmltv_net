@@ -1,0 +1,159 @@
+#!/usr/bin/env perl
+# 
+#
+
+use warnings;
+
+use XMLTV;
+use Shepherd::Common;
+use POSIX qw(strftime mktime);
+use Data::Dump qw(dump);
+use Data::Dumper;
+#
+# global variables and settings
+#
+# supported Shepherd channels and the corresponding number @ zaxmltv
+
+my @supported = ("10 Bold","10 HD","10 Peach","7flix","7HD","7mate","7TWO","9Gem","9Go!",
+		"9HD","9Life","9Rush","ABC COMEDY/ABC KIDS","ABC HD","ABCME","ABCNEWS",
+		"NITV","SBS Food", "SBS HD", "SBS World Movies", "SBSVICELANDHD");
+my %channel_map = (
+        '1.yourtv.com.au' => '10bold.shepherd.au',
+#	'10.yourtv.com.au' => '10',
+        '11.yourtv.com.au' => '10peach.shepherd.au',
+#        '12.yourtv.com.au' => '10 Bold',
+        '13.yourtv.com.au' => '10hd.shepherd.au',
+#        '14.yourtv.com.au' => 'TVSN QLD',
+#        '15.yourtv.com.au' => 'SpreeTV QLD',
+#        '2.yourtv.com.au' => 'ABC',
+        '20.yourtv.com.au' => 'abchd.shepherd.au',
+#        '21.yourtv.com.au' => 'ABC',
+        '22.yourtv.com.au' => 'abccommedy/abckids.shepherd.au',
+        '23.yourtv.com.au' => 'abcme.shepherd.au',
+        '24.yourtv.com.au' => 'abcnews.shepherd.au',
+#        '25.yourtv.com.au' => 'ABC Local Radio',
+#        '26.yourtv.com.au' => 'ABC Radio National',
+#        '27.yourtv.com.au' => 'ABC Classic',
+#        '28.yourtv.com.au' => 'Triple J',
+#        '29.yourtv.com.au' => 'Triple J Unearthed',
+#        '200.yourtv.com.au' => 'Double J',
+#        '201.yourtv.com.au' => 'ABC Jazz',
+#        '202.yourtv.com.au' => 'ABC Kids Listen',
+#        '203.yourtv.com.au' => 'ABC Country',
+#        '204.yourtv.com.au' => 'ABC News Radio',
+#        '3.yourtv.com.au' => 'SBS',
+        '30.yourtv.com.au' => 'sbshd.shepherd.au',
+        '31.yourtv.com.au' => 'sbsvicelandhd.shepherd.au',
+        '32.yourtv.com.au' => 'sbsworldmovies.shepherd.au',
+        '33.yourtv.com.au' => 'sbsfood.shepherd.au',
+        '34.yourtv.com.au' => 'nitv.shepherd.au',
+#        '36.yourtv.com.au' => 'SBS Arabic24',
+#        '37.yourtv.com.au' => 'SBS Radio 1',
+#        '38.yourtv.com.au' => 'SBS Radio 2',
+#        '39.yourtv.com.au' => 'SBS Chill',
+#        '301.yourtv.com.au' => 'SBS Radio 1',
+#        '302.yourtv.com.au' => 'SBS Radio 2',
+#        '303.yourtv.com.au' => 'SBS Radio 3',
+#        '304.yourtv.com.au' => 'SBS Arabic24',
+#        '305.yourtv.com.au' => 'SBS PopDesi',
+#        '306.yourtv.com.au' => 'SBS Chill',
+#        '307.yourtv.com.au' => 'SBS PopAsia',
+#        '7.yourtv.com.au' => 'Seven',
+        '70.yourtv.com.au' => '7hd.shepherd.au',
+#        '71.yourtv.com.au' => 'Seven',
+        '72.yourtv.com.au' => '7two.shepherd.au',
+#        '73.yourtv.com.au' => '7mate.shepherd.au',
+        '74.yourtv.com.au' => '7mate.shepherd.au', # 7Mate HD
+#        '75.yourtv.com.au' => 'Openshop',
+        '76.yourtv.com.au' => '7flix.shepherd.au',
+#        '78.yourtv.com.au' => 'RACING.COM',
+#        '9.yourtv.com.au' => 'Nine',
+        '90.yourtv.com.au' => '9hd.shepherd.au',
+#        '91.yourtv.com.au' => 'Nine',
+#        '92.yourtv.com.au' => '9gem.shepherd.au',
+        '93.yourtv.com.au' => '9go!.shepherd.au',
+        '94.yourtv.com.au' => '9life.shepherd.au',
+        '95.yourtv.com.au' => '9gem.shepherd.au', #9Gem HD
+        '96.yourtv.com.au' => '9rush.shepherd.au',
+#        '99.yourtv.com.au' => '9Go!',
+);
+
+$| = 1;
+my $writer;
+
+#
+# go go go!
+#
+
+my %stats;
+my $o;
+
+Shepherd::Common::program_begin(\$o, "xmltv_net grabber", "0.01", \%stats);
+&start_writing_xmltv();
+#my ($channels, $opt_channels, $gaps) =();
+
+($channels, $opt_channels, $gaps) = Shepherd::Common::read_channels($o);
+
+&get_data();
+
+
+$writer->end();
+
+Shepherd::Common::program_end($o, %stats);
+exit(0);
+
+##############################################################################
+
+sub start_writing_xmltv
+{	
+	my %writer_args = ( encoding => 'UTF-8' );
+	if ($o->{outputfile}) {
+		my $fh = new IO::File(">$o->{outputfile}") || die "can't open $o->{outputfile}: $!";
+		$writer_args{OUTPUT} = $fh;
+	}
+
+	$writer = new XMLTV::Writer(%writer_args);
+	$writer->start ( { 'source-info-name' => "xmltv.net",'generator-info-name' => "$o->{program_name} v$o->{version_number}"} );
+}
+
+##############################################################################
+
+sub get_data
+{
+#        my $file = $_[0];
+	$baseurl = "http://xmltv.net/xml_files/Brisbane.xml";
+	my $data = &Shepherd::Common::get_url(url => $baseurl);
+        if (!$data) {
+                 Shepherd::Common::log("Failed to get XML from '$baseurl'");
+                 $stats{failed_html_get}++;
+                 return 0;
+        }
+        my $listing = XMLTV::parse($data);
+#	my $file = '/tmp/Brisbane.xml';
+#	my $listing = XMLTV::parsefile($file);
+#	print(Dumper($listing)."\n");
+        # strip the cruft from the source xml, we only want the programs.
+        my ($encoding, $credits, $ch, $progs) = @$listing;
+
+	foreach $chan (keys %$ch) {
+		next unless defined $channel_map{$chan};
+		if (defined ($ch->{$chan}->{'icon'})) {
+			$writer->write_channel( {'display-name' => [[ $ch->{$chan}->{'display-name'}[0][0], $o->{lang} ]],
+					'id' => $channel_map{$chan} ,
+					'icon' => $ch->{$chan}->{'icon'} } );
+
+		} else {
+			$writer->write_channel( {'display-name' => [[ $ch->{$chan}->{'display-name'}[0][0], $o->{lang} ]],
+					'id' => $channel_map{$chan} } );
+		}
+	}
+        foreach (@$progs) {
+		next unless defined $channel_map{$_->{channel}};
+                $_->{channel} = $channel_map{$_->{channel}};
+                $writer->write_programme($_);
+        }
+                                                                                                                                 
+}
+
+##############################################################################
+

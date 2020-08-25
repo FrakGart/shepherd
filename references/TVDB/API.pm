@@ -19,7 +19,7 @@ use XML::Simple;
 
 use vars qw($VERSION %Defaults %Url);
 
-$VERSION = "0.33";
+$VERSION = "0.34";
 
 # TheTVDB Urls
 %Url = (
@@ -210,7 +210,7 @@ sub _downloadXml {
 	return undef unless $xml;
 
 	# Remove empty tags
-	$xml =~ s/(<[^\/\s>]*\/>|<[^\/\s>]*><\/[^>]*>)//gs;
+	#$xml =~ s/(<[^\/\s>]*\/>|<[^\/\s>]*><\/[^>]*>)//gs;
 
 	# Return process XML into hashref
 	return $self->{xml}->XMLin($xml);
@@ -226,7 +226,7 @@ sub _downloadApikeyXml {
 	$xml =~ s/seriesid>/id>/g;
 
 	# Remove empty tags
-	$xml =~ s/(<[^\/\s>]*\/>|<[^\/\s>]*><\/[^>]*>)//gs;
+	#$xml =~ s/(<[^\/\s>]*\/>|<[^\/\s>]*><\/[^>]*>)//gs;
 
 	# Return process XML into hashref
 	return $self->{xml}->XMLin($xml);
@@ -247,12 +247,13 @@ sub _downloadZip {
 	my $xml = <$obj>;
 
 	# Make en.xml/banners.xml/actors.xml into one xml file
-	if ($xml =~ s/<\/Data><\?xml.*?Banners>|<\/Banners><\?xml.*?Actors>//gs) {
-		$xml =~ s/<\/Actors>$/<\/Data>/s;
-	}
+	#if ($xml =~ s/<\/Data><\?xml.*?Banners>|<\/Banners><\?xml.*?Actors>//gs) {
+	#	$xml =~ s/<\/Actors>$/<\/Data>/s;
+	#}
+	$xml = "<parent>$xml</parent>";
 
 	# Remove empty tags
-	$xml =~ s/(<[^\/\s>]*\/>|<[^\/\s>]*><\/[^>]*>)//gs;
+	#$xml =~ s/(<[^\/\s>]*\/>|<[^\/\s>]*><\/[^>]*>)//gs;
 
 	&debug(4, "download Zip: $url\n", XML => \$xml);
 
@@ -462,14 +463,14 @@ sub getSeriesId {
 ###############################################################################
 # Get series/lang.xml for series
 sub getSeries {
-	my ($self, $name, $nocache) = @_;
-	&debug(2, "getSeries: $name, $nocache\n");
+	my ($self, $sid, $nocache) = @_;
+	&debug(2, "getSeries: $sid, $nocache\n");
 
-	my $sid = $self->getSeriesId($name, $nocache?$nocache-1:0);
+	#my $sid = $self->getSeriesId($name, $nocache?$nocache-1:0);
 	return undef unless $sid;
 
 	my $series = $self->{cache}->{Series};
-	if (defined $series->{$sid} && $series->{$sid}->{Seasons}) {
+	if (defined $series->{$sid} && $series->{$sid} != "" && $series->{$sid}->{Seasons}) {
 		# Get updated series data
 		if ($nocache) {
 			&verbose(1, "TVDB::API: Updating series: $sid => $series->{$sid}->{SeriesName}\n");
@@ -488,7 +489,7 @@ sub getSeries {
 
 	# Get full series data
 	} else {
-		$self->getSeriesAll($sid, 1);
+		return $self->getSeriesAll($sid, 1);
 	}
 
 	return $series->{$sid};
@@ -510,22 +511,24 @@ sub getSeriesAll {
 
 	# Download full series data
 	} else {
-		&verbose(1, "TVDB::API: Downloading full series: $sid".(defined $series->{$sid}?" => $series->{$sid}->{SeriesName}":'')."\n");
+		&verbose(1, "TVDB::API: Downloading full series: $sid".(defined $series->{$sid}?" => $series->{$sid}->{SeriesName}":'')."\n") if defined $series->{$sid} && $series->{$sid} != "";
 		my $data = $self->_downloadZip($Url{getSeriesAll}, $sid, $self->{lang});
 		return undef unless $data;
 
 		# Copy series into cache
-		#@{$series->{$sid}}{keys %{$data->{Series}->{$sid}}} = values %{$data->{Series}->{$sid}};
+		#@{$series->{$sid}}{keys %{$data->{Data}->{Series}->{$sid}}} = values %{$data->{Data}->{Series}->{$sid}};
 		if (defined $series->{$sid}) {
-			while (my ($key,$value) = each %{$data->{Series}->{$sid}}) {
+			while (my ($key,$value) = each %{$data->{Data}->{Series}->{$sid}}) {
 				$series->{$sid}->{$key} = $value;
 			}
 		} else {
-			$self->{cache}->{Series}->{$sid} = $data->{Series}->{$sid};
+			$self->{cache}->{Series}->{$sid} = $data->{Data}->{Series}->{$sid};
+			$series = $self->{cache}->{Series};
 		}
+		die "Series SID not defined" if (!defined $series->{$sid});
 
 		# Copy episodes into cache
-		while (my ($eid,$ep) = each %{$data->{Episode}}) {
+		while (my ($eid,$ep) = each %{$data->{Data}->{Episode}}) {
 			$series->{$sid}->{Seasons} = [] unless $series->{$sid}->{Seasons};
 			#print "Season: $ep->{SeasonNumber} $series->{$sid}->{Seasons}->[$ep->{SeasonNumber}]\n";
 			$series->{$sid}->{Seasons}->[$ep->{SeasonNumber}]->[$ep->{EpisodeNumber}] = $eid;
@@ -533,10 +536,10 @@ sub getSeriesAll {
 		}
 
 		# Save actors
-		$series->{$sid}->{Actor} = $data->{Actor};
+		$series->{$sid}->{Actor} = $data->{Actors}->{Actor};
 
 		# Save banners
-		$series->{$sid}->{Banner} = $data->{Banner};
+		$series->{$sid}->{Banner} = $data->{Banners}->{Banner};
 	}
 
 	return $series->{$sid};

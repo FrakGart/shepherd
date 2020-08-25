@@ -24,7 +24,7 @@ use strict;
 use warnings;
 
 my $progname = "tmdb_augment_data";
-my $version = "0.09";
+my $version = "0.10";
 
 use XMLTV;
 use POSIX qw(strftime mktime);
@@ -34,6 +34,7 @@ use Data::Dumper;
 use HTML::TreeBuilder;
 use Shepherd::Common;
 use Data::Dump qw(dump);
+use String::Tokenizer;
 use TMDB;
 #
 # some initial cruft
@@ -89,6 +90,9 @@ GetOptions(
 	'no-retry'		=> \$opt->{dont_retry},
 	'help'			=> \$opt->{help},
 	'test=s'		=> \$opt->{test},
+	'test_year=s'		=> \$opt->{test_year},
+	'test_duration=s'	=> \$opt->{test_duration},
+	'test_desc=s'		=> \$opt->{test_desc},
 	'simpletest=s'		=> \$opt->{simpletest},
 	'set=s'			=> \$opt->{set},
 	'verbose'		=> \$opt->{help},
@@ -138,6 +142,7 @@ Supported options include:
   --apikey=(string)    tmdb.com API key (string)
 
   --test=(string)      operate in 'test mode', look up prog named (string)
+  --test_desc=(string)      operate in 'test mode', look up prog named (string)
 
   --set=(setting):(value) save setting override: (value) 1=enable, 0=disable
         dont-augment-desc:1/0 (don't / do)
@@ -148,6 +153,12 @@ EOF
 	}
 	exit(0);
 }
+
+die "No API Key, please set an api key with ./shepherd --component-set tvdb_augment_data:apikey=apikeyhere"
+   if (! defined $opt->{apikey});
+
+my $tmdb = TMDB->new( apikey => $opt->{apikey} );
+
 
 &run_test if (defined $opt->{test});
 &set_settings if (defined $opt->{set});
@@ -169,10 +180,6 @@ Shepherd::Common::log(sprintf "started: cache %s, %s%soutput %s",
 
 &read_cache unless ($opt->{no_cache});
 
-die "No API Key, please set an api key with ./shepherd --component-set tvdb_augment_data:apikey=apikeyhere"
-   if (! defined $opt->{apikey});
-
-my $tmdb = TMDB->new( apikey => $opt->{apikey} );
 
 
 my %writer_args = ( encoding => 'ISO-8859-1' );
@@ -283,11 +290,111 @@ sub write_cache
 }
 
 ##############################################################################
+# Standardize title match
+
+sub standardize_title
+{
+	my $title = shift;
+	$title = lc($title);
+        $title =~ s/^\s+//;
+	$title =~ s/\s+$//;
+	$title =~ s/ *\& */ and /g;
+	$title =~ s/\s+/ /;
+	$title =~ s/\bone\b/1/g;
+	$title =~ s/\btwo\b/2/g;
+	$title =~ s/\bii\b/2/g;
+	$title =~ s/\bthree\b/3/g;
+	$title =~ s/\biii\b/3/g;
+	$title =~ s/\bfour\b/4/g;
+	$title =~ s/\biv\b/4/g;
+	$title =~ s/\bfive\b/5/g;
+	$title =~ s/\bv\b/5/g;
+	$title =~ s/\bsix\b/6/g;
+	$title =~ s/\bvi\b/6/g;
+	$title =~ s/\bseven\b/7/g;
+	$title =~ s/\bvii\b/7/g;
+	$title =~ s/\beight\b/8/g;
+	$title =~ s/\bvii\b/8/g;
+	$title =~ s/\bnine\b/9/g;
+	$title =~ s/\bix\b/9/g;
+	$title =~ s/\bten\b/10/g;
+	return $title;
+}
+
+##############################################################################
+# fuzzy description match
+
+sub fuzzy_description_match
+{
+	my ($desc, $overview, $movie_id) = @_;
+	my $match_count = 0;
+	my $desc_word_count;
+	my $overview_word_count;
+
+	$desc =~ s/[[:punct:]]//g;
+	$overview =~ s/[[:punct:]]//g;
+
+	my $tokenizer = String::Tokenizer->new();
+
+	$tokenizer->tokenize($desc);
+	my @desc_tokens = $tokenizer->getTokens();
+
+	$tokenizer->tokenize($overview);
+	my @overview_tokens = $tokenizer->getTokens();
+
+	my %desc_count;
+	$desc_count{$_}++ foreach @desc_tokens;
+
+	$desc_word_count++ foreach keys %desc_count;
+
+	my $name_matches = 0;
+
+	foreach my $character (@{$data_cache->{movie_lookup}->{$movie_id}->{cast}}) {
+		foreach my $key (keys %desc_count) {
+			if (length($key) > 3 && @$character[1] =~ /\b$key\b/) {
+				print("    Matched Name: $key, @$character[1]\n");
+				$name_matches++;
+			}
+		}
+	}
+
+	if ($name_matches <= 0 && $desc_word_count < 20) {
+		return 0;
+	}
+
+	my %overview_count;
+	$overview_count{$_}++ foreach @overview_tokens;
+
+
+	$overview_word_count++ foreach keys %overview_count;
+
+	foreach my $key (keys %desc_count) {
+		if (defined $overview_count{$key}) {
+			$match_count++
+		}
+	}
+
+	print ("    Matches: $match_count / $desc_word_count\n");
+	if ($desc_word_count >= 20 && (($match_count / $desc_word_count * 100) + ($name_matches * 20)) > 70) {
+		print ("    Fuzzy description match\n");
+		return 1;
+	} else {
+		return 0;
+	}
+
+	#print (dump(%desc_count));
+	#print (dump(%overview_count));
+
+	return 0;
+}
+
+##############################################################################
 # use the online TMDb "search" to find match
 
 sub search_tmdb_online
 {
-	my ($tmdb, $title, $post_fields, $movie_year, $prog_duration) = @_;
+	my ($tmdb, $title, $post_fields, $movie_year, $prog_duration, $prog_description) = @_;
+	my $standardTitle = standardize_title($title);
 
 	if ($stats{failed_online_tmdb_lookup} and $stats{failed_online_tmdb_lookup} >= 3) {
 		Shepherd::Common::log("too many failed lookups to online TMDb search for '$title' with $post_fields");
@@ -298,24 +405,94 @@ sub search_tmdb_online
 
 	my @results = $tmdb->search->movie($title);
 	$data_cache->{movie_id_lookup}->{$post_fields}->{last_fetched} = time;
+	my $description_match = 0;
 	my $urls_found = 0;
 	my %urls;
 	foreach my $result (@results) {
-		next unless ($result->{title} =~ /^$title$/i || $result->{original_title} =~ /^$title$/i);
-		my $found_year = 0;
 		#print(dump($result));
+		#print("$standardTitle\n");
+		#print("$standardResultTitle\n");
+		my $standardResultTitle = standardize_title($result->{title});
+		my $standardOriginalTitle = standardize_title($result->{original_title});
+		next unless ($standardResultTitle =~ /^$standardTitle$/i || $standardOriginalTitle =~ /^$standardTitle$/i);
+
+		if (defined $data_cache->{movie_lookup}->{$result->{id}}) {
+                	$stats{tmdb_movie_used_cache_entry}++;
+		} else {
+		        &get_tmdb_movie_online($tmdb, $title, $result->{id});
+		}
+
+		if (defined $data_cache->{movie_lookup}->{$result->{id}}->{runtime} && defined $prog_duration &&
+			$data_cache->{movie_lookup}->{$result->{id}}->{runtime} > $prog_duration) {
+			next;
+		}
+		#print "Possible Candidate: ".Dumper($data_cache->{movie_lookup}->{$result->{id}});
+
+		#$data_cache->{movie_lookup}->{$movie_id};
+
+		my $found_year = 0;
 		#print("Release Date: ".$result->{release_date}."\n");
-		if ($result->{release_date} =~ /^((19|20)\d\d)/) {
+		if (defined $result->{release_date} && $result->{release_date} =~ /^((19|20)\d\d)/) {
 			$found_year = $1;
 		}
-		#print ("Movie year: ".dump($movie_year)." Found Year: ".dump($found_year)."\n");
-		if (!$movie_year || !$found_year || ( abs($movie_year - $found_year) <= 1) ) {
+		my $desc_match = 0;
+		fuzzy_description_match($prog_description, $result->{overview}, $result->{id}) if defined $prog_description;
+		print ("    Movie year: ".dump($movie_year).", Found Year: ".dump($found_year)."\n");
+		if ($desc_match && (!$movie_year || ($found_year && ( abs($movie_year - $found_year) <= 1))) ) {
 			$urls{$result->{id}}++;
 			$urls_found++ if ($urls{$result->{id}} == 1);
+			if (defined $result->{release_date}) {
+				printf( "  %s:\t%s (%s)\n",
+					$result->{id}, $result->{title},
+					split( /-/, $result->{release_date}, 1 ) );
+			} else {
+				printf( "  %s:\t%s\n",
+					$result->{id}, $result->{title} );
+			}
+
 		}
-		printf( "%s:\t%s (%s)\n",
-			$result->{id}, $result->{title},
-			split( /-/, $result->{release_date}, 1 ) );
+	}
+	if ($urls_found <1) {
+		foreach my $result (@results) {
+			#print(dump($result));
+			my $standardResultTitle = standardize_title($result->{title});
+			my $standardOriginalTitle = standardize_title($result->{original_title});
+			next unless ($standardResultTitle =~ /^$standardTitle$/i || $standardOriginalTitle =~ /^$standardTitle$/i);
+
+			if (defined $data_cache->{movie_lookup}->{$result->{id}}) {
+        	        	$stats{tmdb_movie_used_cache_entry}++;
+			} else {
+		        	&get_tmdb_movie_online($tmdb, $title, $result->{id});
+			}
+
+			if (defined $data_cache->{movie_lookup}->{$result->{id}}->{runtime} && defined $prog_duration &&
+				$data_cache->{movie_lookup}->{$result->{id}}->{runtime} > $prog_duration) {
+				next;
+			}
+			#print "Possible Candidate: ".Dumper($data_cache->{movie_lookup}->{$result->{id}});
+
+			#$data_cache->{movie_lookup}->{$movie_id};
+
+			my $found_year = 0;
+			#print("Release Date: ".$result->{release_date}."\n");
+			if (defined $result->{release_date} && $result->{release_date} =~ /^((19|20)\d\d)/) {
+				$found_year = $1;
+			}
+			print ("    Movie year: ".dump($movie_year).", Found Year: ".dump($found_year)."\n");
+			if (!$movie_year || ($found_year && ( abs($movie_year - $found_year) <= 1)) ) {
+				$urls{$result->{id}}++;
+				$urls_found++ if ($urls{$result->{id}} == 1);
+				if (defined $result->{release_date}) {
+					printf( "  %s:\t%s (%s)\n",
+						$result->{id}, $result->{title},
+						split( /-/, $result->{release_date}, 1 ) );
+				} else {
+                                        printf( "  %s:\t%s\n",
+                                                $result->{id}, $result->{title} );
+				}
+
+			}
+		}
 	}
 
 	if ($urls_found < 1) {
@@ -325,22 +502,29 @@ sub search_tmdb_online
 			my $found_title = 0;
 			foreach my $aka (@{$movie->alternative_titles}) {
 				#print (dump($aka));
-				if ($aka =~ /^$title$/i) {
+				if (standardize_title(%$aka{title}) =~ /^$standardTitle$/i) {
 					$found_title = 1;
 				}
 			}
 			next unless ($found_title);
 			my $found_year = 0;
-			if ($result->{release_date} =~ /^\(\d\d\d\d\)/) {
+			if (defined $result->{release_date} && $result->{release_date} =~ /^((19|20)\d\d)/) {
 				$found_year = $1;
 			}
-			if (!$movie_year || !$found_year || ( abs($movie_year - $found_year) <= 1) ) {
+			print ("    Movie year: ".dump($movie_year).", Found Year: ".dump($found_year)."\n");
+			if (!$movie_year || ( abs($movie_year - $found_year) <= 1) ) {
 				$urls{$result->{id}}++;
 				$urls_found++ if ($urls{$result->{id}} == 1);
+				if (defined $result->{release_date}) {
+					printf( "  %s:\t%s (%s)\n",
+						$result->{id}, $result->{title},
+						split( /-/, $result->{release_date}, 1 ) );
+				} else {
+					printf( "  %s:\t%s\n",
+						$result->{id}, $result->{title} );
+				}
+
 			}
-			printf( "%s:\t%s (%s)\n",
-				$result->{id}, $result->{title},
-				split( /-/, $result->{release_date}, 1 ) );
 		}
 
 
@@ -393,10 +577,10 @@ sub get_tmdb_movie_online
 		return;
 	}
 
-	print ("Movie ID: ".$movie_id."\n");
+	print ("    Movie ID: ".$movie_id."\n");
 	my $movie = $tmdb->movie( id => $movie_id );
 
-	print (dump($movie->info));
+	#print (dump($movie->info));
 
 	if (!$movie) {
 		$stats{failed_online_tmdb_lookup}++;
@@ -411,7 +595,7 @@ sub get_tmdb_movie_online
 
 	$data_cache->{movie_lookup}->{$movie_id}->{title} = $movie->title;
         $data_cache->{movie_lookup}->{$movie_id}->{year} = $movie->year;
-	$data_cache->{movie_lookup}->{$movie_id}->{cover} = "http://image.tmdb.org/t/p/w200".$movie->info->{poster_path};
+	$data_cache->{movie_lookup}->{$movie_id}->{cover} = "http://image.tmdb.org/t/p/w200".$movie->info->{poster_path} if defined $movie->info->{poster_path};
 	my @crew = $movie->crew;
 	foreach my $crew_member (@crew) {
 		if ($crew_member->{job} =~ /^Director$/) {
@@ -585,10 +769,12 @@ sub programme_cb( $ )
 		}
 
 		#
-		# first check if we have a previos cache entry for this
+		# first check if we have a previous cache entry for this
 		#
 		if (defined $data_cache->{movie_id_lookup}->{$post_fields} and
-				defined $data_cache->{movie_id_lookup}->{$post_fields}->{id}) {
+				defined $data_cache->{movie_id_lookup}->{$post_fields}->{id} 
+#				and !($data_cache->{movie_id_lookup}->{$post_fields}->{id} eq "-")
+		) {
 			if ($data_cache->{movie_id_lookup}->{$post_fields}->{id} eq "-") {
 				# negatively cached
 				$stats{tmdb_lookup_used_negative_cache_entry}++;
@@ -604,7 +790,7 @@ sub programme_cb( $ )
 			#
 			# no cache, go look it up
 			#
-			&search_tmdb_online($tmdb, $movie_title, $post_fields, $movie_year, $prog_duration);
+			&search_tmdb_online($tmdb, $movie_title, $post_fields, $movie_year, $prog_duration, $prog->{desc}->[0]->[0]);
 
 			# TMDb web site failed/returned unexpected result, just skip rest
 			goto END
@@ -965,7 +1151,10 @@ sub run_test
 	Shepherd::Common::log("running test for: ".$opt->{test});
 
 	my $post_fields = "title=".Shepherd::Common::urlify($opt->{test});
-	&search_tmdb_online($tmdb, $opt->{test},$post_fields);
+	$post_fields .= "&year=".Shepherd::Common::urlify($opt->{test_year})
+	  if ((defined $opt->{test_year}) && ($opt->{test_year} > 0));
+
+	&search_tmdb_online($tmdb, $opt->{test},$post_fields,$opt->{test_year},$opt->{test_duration},$opt->{test_desc});
 
 	die "lookup unsuccessful\n"
 	  if ((!defined $data_cache->{movie_id_lookup}->{$post_fields}) ||

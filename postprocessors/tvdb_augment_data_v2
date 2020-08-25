@@ -1,0 +1,1044 @@
+#!/usr/bin/env perl
+
+# TVDb XMLTV data augmenter
+#
+#  * to be used as a postprocessor for XMLTV data
+#  * uses The TV Database (www.tvdb.com) to augment TV guide data;
+#    contacts www.tvdb.com to collect actual movie details
+#  * this should only be used for non-commercial use.
+#    please follow the TVDb terms and conditions.
+#  * can be used in conjunction with 'shepherd' XMLTV reconciler or standalone
+#    (pipe-through)
+#  * no configuration necessary
+#
+#  based roughly on a few existing IMDB XMLTV modules and IMDB CPAN modules
+#  but doesn't actually use them due to the large number of interdependencies
+#  they drag in.
+#     much credit goes to Michael Stepanov for his excellent IMDB::Film module
+#     and the regex's used to match data from IMDb pages
+#
+#  changelog:
+#    0.01 18dec17 stevenb
+
+use strict;
+use warnings;
+
+my $progname = "tvdb_augment_data_v2";
+my $version = "0.01";
+
+use XMLTV;
+use POSIX qw(strftime mktime);
+use Getopt::Long;
+use HTML::TokeParser;
+use Data::Dumper;
+use HTML::TreeBuilder;
+use Shepherd::Common;
+use Data::Dump qw(dump);
+use Data::Dumper;
+use TVDB::API;
+#
+# some initial cruft
+#
+
+my $script_start_time = time;
+my %stats;
+my $data_cache;
+my $settings_override = { };
+
+
+$| = 1;
+
+#
+# parse command line
+#
+
+my $opt = { };
+$opt->{output_file} =		"output.xmltv";
+$opt->{cache_file} =		"tvdb_augment_data.storable.cache";
+$opt->{lang} = 			"en";
+$opt->{debug} =			1;
+$opt->{min_duration} =		20;	# 65 mins
+$opt->{max_duration} =		125;	# 5 hours
+$opt->{skip_categories} = 	"Infotainment,Shopping,Business and Finance,Game Show,News,Parliament,Current Affairs,sports,Sport,Weather,Reality,live";
+$opt->{cache_details_for} =	120;	# cache movie details for 4 months
+$opt->{cache_title_for} = 	120;	# cache title lookups for 4 months
+$opt->{dont_augment_desc} =	0;	# from 2008/04/15
+
+GetOptions(
+	'region=i'		=> \$opt->{region},		# ignored
+	'days=i'		=> \$opt->{days},		# ignored
+	'offset=i'		=> \$opt->{offset},		# ignored
+	'timezone=s'		=> \$opt->{timezone},		# ignored
+	'channels_file=s' 	=> \$opt->{channels_file},	# ignored
+	'config-file=s'		=> \$opt->{configfile},		# ignored
+
+	'min_duration=i' 	=> \$opt->{min_duration},
+	'max_duration=i' 	=> \$opt->{max_duration},
+	'skip_categories=s'	=> \$opt->{skip_categories},
+	'cache_details_for=i' 	=> \$opt->{cache_details_for},
+	'cache_title_for=i' 	=> \$opt->{cache_title_for},
+	'long-info'             => \$opt->{long_info},
+	'dont-augment-desc=i' 	=> \$opt->{dont_augment_desc},
+	'apikey=s' 		=> \$opt->{apikey},
+
+	'output=s'		=> \$opt->{output_file},
+	'cache-file=s'		=> \$opt->{cache_file},
+	'fast'			=> \$opt->{fast},
+	'no-cache'		=> \$opt->{no_cache},
+	'debug+'		=> \$opt->{debug},
+	'lang=s'		=> \$opt->{lang},
+	'no-retry'		=> \$opt->{dont_retry},
+	'help'			=> \$opt->{help},
+	'test=s'		=> \$opt->{test},
+	'test_subtitle=s'	=> \$opt->{test_subtitle},
+	'simpletest=s'		=> \$opt->{simpletest},
+	'set=s'			=> \$opt->{set},
+	'verbose'		=> \$opt->{help},
+	'version'		=> \$opt->{version},
+	'ready'			=> \$opt->{ready},
+	'desc'			=> \$opt->{desc},
+	'v'			=> \$opt->{version});
+
+printf "%s v%s\n",$progname,$version;
+
+if ($opt->{version} || $opt->{desc} || $opt->{help} || $opt->{ready} ||
+    $opt->{output_file} eq "") {
+	printf "Augments XMLTV data with programme information from ".
+	  "The Internet Movie Database (www.themoviedb.org)\n" if $opt->{desc};
+
+	printf "$progname is ready for operation.\n" if ($opt->{ready});
+
+	printf "No --output file specified.\n" if ($opt->{output_file} eq "");
+
+	if ($opt->{help} || $opt->{output_file} eq "") {
+		print<<EOF
+
+usage: $0 [options] {FILE(s)}
+
+Supported options include:
+  --min_duration={min} ignore programs under {min} duration (default: $opt->{min_duration} min)
+  --max_duration={min} ignore programs over {min} duration (default: $opt->{max_duration} min)
+  --skip_categories={list} don't try to look up programmes in these categories (default: $opt->{skip_categories})
+
+  --dont-augment-desc=1/0 (don't / do)
+                       don't add any TVDB data to programme description,
+                       only update the data fields (default: 1 or don't)
+  --long-info          add lots of TVDB data to description (default: don't)
+
+  --cache_details_for={days}  cache programme details for {days} (def: $opt->{cache_details_for} days)
+  --cache_title_for={days}    cache TVDB URLs for {days} (def: $opt->{cache_title_for} days)
+
+  --lang={lang}        set language to {lang} (default: $opt->{lang})
+  --output={file}      send final XMLTV output to {file} (default: $opt->{output_file})
+  --debug              enable debugging
+  --fast               don't pause between requests to www.themoviedb.org
+
+  --cache-file={file}  local file to use as our data cache (default: $opt->{cache_file})
+  --no-cache           don't use local cache to reduce network load on www.themoviedb.org
+  --no-retry           don't retry failed HTTP requests
+
+  --apikey=(string)    tvdb.com API key (string)
+
+  --test=(string)      operate in 'test mode', look up prog named (string)
+
+  --set=(setting):(value) save setting override: (value) 1=enable, 0=disable
+        dont-augment-desc:1/0 (don't / do)
+	long-info:1/0 (yes / no)
+
+EOF
+;
+	}
+	exit(0);
+}
+
+die "No API Key, please set an api key with ./shepherd --component-set tvdb_augment_data:apikey=apikeyhere"
+   if (! defined $opt->{apikey});
+
+my $tvdb = TVDB::API::new($opt->{apikey});
+
+die "TVDB Object not created"
+  if (! defined $tvdb);
+
+&run_test if (defined $opt->{test});
+&set_settings if (defined $opt->{set});
+
+# set defaults
+Shepherd::Common::set_default("debug", ((defined $opt->{debug} && $opt->{debug} > 0) ? 2 : 0));
+Shepherd::Common::set_default("stats", \%stats);
+Shepherd::Common::set_default("retry_delay", 10);
+Shepherd::Common::set_default("delay", int(rand(4) + 3)) unless (defined $opt->{fast});
+Shepherd::Common::set_default('fake' => 0);
+
+# go go go!
+
+Shepherd::Common::log(sprintf "started: cache %s, %s%soutput %s",
+	($opt->{no_cache} ? "disabled" : "enabled"),
+	($opt->{fast} ? "fast-override, " : ""),
+	($opt->{debug} ? "debug enabled, " : ""),
+	($opt->{output_file}));
+
+&read_cache unless ($opt->{no_cache});
+
+
+my %writer_args = ( encoding => 'ISO-8859-1' );
+my $fh = new IO::File(">".$opt->{output_file}) ||
+  die "can't open $opt->{output_file} for writing: $!";
+$writer_args{OUTPUT} = $fh;
+
+my $writer = new XMLTV::Writer(%writer_args);
+$writer->start( {
+	'source-info-url' => "http://www.tvdb.com",
+	'source-info-name' => "$progname $version",
+	'generator-info-name' => "$progname $version"} );
+
+foreach my $file (@ARGV) {
+	Shepherd::Common::log((sprintf "Parsing: %s",
+		($file eq "-" ? "(from-stdin, hit control-D to finiah)" : $file)));
+	XMLTV::parsefiles_callback(\&encoding_cb, \&credits_cb,
+		\&channel_cb,\&programme_cb, $file);
+}
+
+$writer->end();
+Shepherd::Common::log("Finished parsing, output in $opt->{output_file}");
+
+&write_cache unless ($opt->{no_cache});
+
+Shepherd::Common::print_stats($progname, $version, $script_start_time, %stats);
+
+exit(0);
+
+##############################################################################
+
+sub set_settings
+{
+	&read_cache;
+	my ($setting, $val) = split(/:/,$opt->{set});
+
+	die "--set format is (setting):(value) where value is 0 for disable, 1 for enable.\n"
+	  if ((!defined $val) || (($val ne "0") && ($val ne "1")));
+
+	die "unknown '--set' parameter '$setting', see --help for details.\n"
+	  if ($setting ne "dont-augment-desc" and $setting ne "long-info");
+
+	printf "%s: override parameter %s: %s\n", $progname, $setting, ($val eq "0" ? "disabled" : "enabled");
+
+	$setting =~ s/-/_/g;
+	$settings_override->{$setting} = $val;
+	&write_cache;
+	exit(0);
+}
+
+##############################################################################
+# populate cache
+
+sub read_cache
+{
+	my $store = Shepherd::Common::read_cache(\$opt->{cache_file});
+	
+	if ($store) {
+		$data_cache = $store->{data_cache};
+		$settings_override = $store->{settings_override};
+
+		foreach my $setting (keys %$settings_override) {
+			if ($settings_override->{$setting} eq "0") {
+				printf "using override parameter %s: %s\n", $setting,
+						($settings_override->{$setting} eq "0" ? "disabled" : "enabled");
+				$opt->{$setting} = 0;
+			}
+		}
+	
+		#
+		# age our caches on startup
+		#
+		my $max_age;
+		
+		# age our programme_id cache on startup
+		my $prog_id = $data_cache->{series_id_lookup};
+		$max_age = time - ($opt->{cache_title_for} * 86400);
+		foreach my $key (keys %{$prog_id}) {
+			if ($data_cache->{series_id_lookup}->{$key}->{last_fetched} < $max_age) {
+			delete $data_cache->{series_id_lookup}->{$key};
+			$stats{removed_programme_id_from_cache}++
+			}
+		}
+		
+		# age our programme cache on startup
+		my $prog = $data_cache->{series_lookup};
+		$max_age = time - ($opt->{cache_details_for} * 86400);
+		foreach my $key (keys %{$prog}) {
+			if (($data_cache->{series_lookup}->{$key}->{last_fetched} < $max_age) ||
+				(($data_cache->{series_lookup}->{$key}->{last_fetched} > 1208908800) && # 2008/04/23
+				($data_cache->{series_lookup}->{$key}->{last_fetched} < 1209772800))){  # 2008/05/03
+			delete $data_cache->{series_lookup}->{$key};
+			$stats{removed_programme_from_cache}++
+			}
+		}
+	}
+}
+
+##############################################################################
+# write out updated cache
+
+sub write_cache
+{
+	my $store;
+	$store->{data_cache} = $data_cache;
+	$store->{settings_override} = $settings_override;
+	Shepherd::Common::write_cache($opt->{cache_file}, $store);
+}
+
+##############################################################################
+# use the online TVDb "search" to find match
+
+sub search_series
+{
+	my ($tvdb, $title) = @_;
+
+	if ($stats{failed_online_tvdb_lookup} and $stats{failed_online_tvdb_lookup} >= 3) {
+		Shepherd::Common::log("too many failed lookups to online TVDb search for '$title'");
+		return;
+	}
+
+	Shepherd::Common::log("  online TVDb search for '$title'");
+
+        die "TVDB object null"
+            if (! defined $tvdb);
+
+	my $results = $tvdb->getPossibleSeriesId($title);
+
+	$data_cache->{series_id_lookup}->{$title}->{last_fetched} = time;
+	my $series_found = 0;
+	my %series;
+	foreach my $result (keys %$results) {
+		next unless (%$results{$result}->{SeriesName} =~ /^$title$/i ||
+			     %$results{$result}->{SeriesName} =~ /^$title \(AU\)$/i);
+		$series{%$results{$result}->{seriesid}}++;
+		$series_found++ if ($series{%$results{$result}->{seriesid}} == 1);
+		printf( "    %s:\t%s\n",
+			%$results{$result}->{seriesid}, %$results{$result}->{SeriesName});
+	}
+	if ($series_found < 1) {
+		foreach my $result (keys %$results) {
+			next unless (%$results{$result}->{SeriesName} =~ /^$title \([A-Z]{1,3}\)$/i);
+			$series{%$results{$result}->{seriesid}}++;
+			$series_found++ if ($series{%$results{$result}->{seriesid}} == 1);
+			printf( "    %s:\t%s\n",
+				%$results{$result}->{seriesid}, %$results{$result}->{SeriesName});
+		}
+	}
+
+	if ($series_found < 1) {
+		foreach my $result (keys %$results) {
+			my @alias = split(/\|/,%$results{$result}->{AliasNames});
+			@alias = grep {$_ ne ''} @alias;
+			#print($result);
+			my $found_title = 0;
+			my $aka;
+			foreach $aka (@alias) {
+				#dump($aka);
+				if (	$aka =~ /^$title$/i ||
+					$aka =~ /^$title \([A-Z]{1,3}\)$/i) {
+					$found_title = 1;
+				}
+			}
+			next unless ($found_title);
+			$series{%$results{$result}->{seriesid}}++;
+			$series_found++ if ($series{%$results{$result}->{seriesid}} == 1);
+			printf( "    %s:\t%s\n", %$results{$result}->{seriesid}, %$results{$result}->{SeriesName} );
+		}
+
+
+	}
+
+
+	# only insert into cache if we match exactly _1_ movie
+	if ($series_found == 1) {
+		my $this_series = (keys %series)[0];
+		$data_cache->{series_id_lookup}->{$title}->{id} = $this_series;
+		$stats{tvdb_lookup_added_positive_cache_entry}++;
+	} else {
+		Shepherd::Common::log("    online search failed: wanted 1 match, got $series_found matches.");
+		# negatively cache our failed lookup
+		$data_cache->{series_id_lookup}->{$title}->{id} = "-";
+		$data_cache->{series_id_lookup}->{$title}->{num_choices} =
+		  $series_found;
+	}
+}
+
+##############################################################################
+# Search for Episode
+#
+
+sub search_episode_by_subtitle
+{
+	my ($tvdb, $series_id, $subtitle) = @_;
+
+	if (!defined $subtitle || $subtitle eq "") {
+		Shepherd::Common::log("failed to fetch tvdb episode data from subtitle");
+		return;
+	}
+
+	if (!$series_id) {
+		$stats{failed_online_tvdb_lookup}++;
+		Shepherd::Common::log("failed to fetch tvdb movie data from $series_id");
+		return;
+	}
+
+	my $series = $data_cache->{series_lookup}->{$series_id};
+	print("Series ID: $series_id\n");
+	# no match or negative cache match - bail out
+	return if (!defined $series);
+
+	#print(Dumper($data_cache->{series_lookup}));
+	my $found_episode = 0;
+
+	foreach my $season (@{$data_cache->{series_lookup}->{$series_id}->{seasons}}) {
+		#print(Dumper($season));
+		foreach my $episode_id (@{$season}) {
+			if (defined $episode_id) {
+				my $episode = $tvdb->getEpisodeId($episode_id);
+				if ($subtitle eq $episode->{EpisodeName}) {
+					print(Dumper($episode));
+					$found_episode = 1;
+					last;
+				}
+			}
+		}
+		last if ($found_episode);
+	}
+
+	return;
+}
+
+##############################################################################
+# Search for Episode
+#
+
+sub search_episode_by_subtitle
+{
+	my ($tvdb, $series_id, $subtitle) = @_;
+
+	if (!defined $subtitle || $subtitle eq "") {
+		Shepherd::Common::log("failed to fetch tvdb episode data from subtitle");
+		return;
+	}
+
+	if (!$series_id) {
+		$stats{failed_online_tvdb_lookup}++;
+		Shepherd::Common::log("failed to fetch tvdb movie data from $series_id");
+		return;
+	}
+
+	my $series = $data_cache->{series_lookup}->{$series_id};
+	print("Series ID: $series_id\n");
+	# no match or negative cache match - bail out
+	return if (!defined $series);
+
+	#print(Dumper($data_cache->{series_lookup}));
+	my $found_episode = 0;
+
+	foreach my $season (@{$data_cache->{series_lookup}->{$series_id}->{seasons}}) {
+		#print(Dumper($season));
+		foreach my $episode_id (@{$season}) {
+			if (defined $episode_id) {
+				my $episode = $tvdb->getEpisodeId($episode_id);
+				if ($subtitle eq $episode->{EpisodeName}) {
+					print(Dumper($episode));
+					$found_episode = 1;
+					last;
+				}
+			}
+		}
+		last if ($found_episode);
+	}
+
+	return;
+}
+
+##############################################################################
+# perform a detailed movie lookup given a movie url
+# store what we find in our data cache
+
+sub get_tvdb_series_online
+{
+	my ($tvdb, $title, $series_id) = @_;
+
+	if ($stats{failed_online_tvdb_lookup} and $stats{failed_online_tvdb_lookup} >= 3) {
+		Shepherd::Common::log("too many failed lookups to downloading online TVDb movie data for '$title'");
+		return;
+	}
+
+	Shepherd::Common::log("  downloading online TVDb movie data for '$title'");
+
+	if (!$series_id) {
+		$stats{failed_online_tvdb_lookup}++;
+		Shepherd::Common::log("failed to fetch tvdb movie data from $series_id");
+		return;
+	}
+
+	#print ("Series ID: ".$series_id."\n");
+	my $series = $tvdb->getSeries( $series_id );
+
+	#print (dump($series));
+
+	if (!$series) {
+		$stats{failed_online_tvdb_lookup}++;
+		Shepherd::Common::log("failed to fetch tvdb movie data from $series_id");
+		return;
+	}
+
+
+	$stats{tvdb_movie_added_cache_entry}++;
+	$data_cache->{series_lookup}->{$series_id}->{last_fetched} = time;
+
+
+	$data_cache->{series_lookup}->{$series_id}->{title} = $series->{SeriesName};
+#        $data_cache->{series_lookup}->{$series_id}->{year} = $movie->year;
+	$data_cache->{series_lookup}->{$series_id}->{poster} = "http://artworks.thetvdb.com/banners/".$series->{poster};
+	$data_cache->{series_lookup}->{$series_id}->{background} = "http://artworks.thetvdb.com/banners/".$series->{fanart};
+
+	my $cast = $series->{Actor};
+	foreach my $cast_member (keys %$cast) {
+		if ($cast->{$cast_member}->{SortOrder} <= 10) {
+			push(@{$data_cache->{series_lookup}->{$series_id}->{cast}}, [$cast->{$cast_member}->{Name}, $cast->{$cast_member}->{Role}]);
+		}
+#		print(dump($cast_member));
+#		print("Name: ".$crew_member->{name}." Job: ".$crew_member->{job}."\n");
+	}
+
+	my @genres = split (/\|/,$series->{Genre});
+        my @grep_array = grep { $_ ne '' } @genres;
+
+	foreach my $genre (@grep_array) {
+		push(@{$data_cache->{series_lookup}->{$series_id}->{genres}}, $genre);
+	}
+	foreach my $season (@{$series->{Seasons}}) {
+		push(@{$data_cache->{series_lookup}->{$series_id}->{seasons}}, $season);
+	}
+
+	#
+	# parse tagline, plot, rating, runtime, aka, trivia, goofs,
+	# awards and summary using generic scalar handler
+	#
+	$data_cache->{series_lookup}->{$series_id}->{summary} = $series->{Overview};
+	$data_cache->{series_lookup}->{$series_id}->{rating} = $series->{Rating}."/10";
+	$data_cache->{series_lookup}->{$series_id}->{rating_votes} = $series->{RatingCount};
+	$data_cache->{series_lookup}->{$series_id}->{runtime} = $series->{Runtime};
+	$data_cache->{series_lookup}->{$series_id}->{language} = $series->{language};
+
+#	print(dump($data_cache->{series_lookup}->{$movie_id}));
+#	print("\n\n");
+
+	# write out the cache every 15 progs or so
+	&write_cache if ((($stats{tvdb_movie_added_cache_entry} % 15) == 0) && (!defined $opt->{no_cache}));
+}
+
+##############################################################################
+
+sub encoding_cb( $ )
+{
+	my $e = shift;
+	# printf "got encoding ".Dumper($e);
+}
+	
+##############################################################################
+
+sub credits_cb( $ )
+{
+	my $c = shift;
+	# printf "got credits ".Dumper($c);
+}
+
+##############################################################################
+
+sub channel_cb( $ )
+{
+	my $c = shift;
+	# printf "got channel ".Dumper($c);
+	$writer->write_channel($c);
+}
+
+##############################################################################
+
+sub programme_cb( $ )
+{
+	my $prog=shift;
+	$stats{programmes}++;
+
+	my $movie_title = $prog->{title}->[0]->[0]
+	  if (($prog->{title}) && ($prog->{title}->[0]) &&
+	      ($prog->{title}->[0]->[0]));
+	my $movie_subtitle = $prog->{'sub-title'}->[0]->[0]
+		if (($prog->{'sub-title'}) && ($prog->{'sub-title'}->[0]) &&
+			($prog->{'sub-title'}->[0]->[0]));
+	my $movie_year = $prog->{date} if ($prog->{date});
+
+	if (($movie_title =~ /^close$/i) || ($movie_title =~ /^station close$/i)) {
+		$stats{skipped_due_to_category}++;
+		goto END;
+	}
+
+	if (defined $prog->{category}) {
+		foreach my $prog_category (@{($prog->{category})}) {
+			foreach my $prog_cat2 (@$prog_category) {
+				foreach my $skip_category (split(/,/,$opt->{skip_categories})) {
+					if (lc($prog_cat2) eq lc($skip_category)) {
+						$stats{skipped_due_to_category}++;
+						goto END;
+					}
+				}
+			}
+		}
+	}
+
+	# print "got programme ".Dumper($prog);
+
+	#
+	# only lookup if  min_duration < prog_duration > min_duration
+	#
+	my $t1 = Shepherd::Common::parse_xmltv_date($prog->{start});
+	my $t2 = Shepherd::Common::parse_xmltv_date($prog->{stop});
+	if ((!$t1) || (!$t2)) {
+		$stats{excluded_couldnt_parse_time}++;
+		goto END;
+	}
+	my $prog_duration = (($t2 - $t1) / 60);
+	if ($prog_duration < $opt->{min_duration}) {
+		$stats{excluded_prog_too_short}++;
+		goto END;
+	}
+	if ($prog_duration > $opt->{max_duration}) {
+		$stats{excluded_prog_too_long}++;
+		goto END;
+	}
+
+	$stats{included_for_tvdb_lookup}++;
+	#print (dump($prog));
+
+	#
+	# find movie url
+	# (either via a cached previous search or via TVDb "power search")
+	#
+	my @search_fields;
+	push(@search_fields, "title=".Shepherd::Common::urlify($movie_title));
+#	push(@search_fields, "&countries=".Shepherd::Common::urlify($prog->{country}->[0][0]))
+#	  if ((defined $prog->{country}) && (defined $prog->{country}->[0][0]));
+	push(@search_fields, "&year=".Shepherd::Common::urlify($prog->{date}))
+	  if ((defined $prog->{date}) && ($prog->{date} > 0));
+#	push(@search_fields, "&language=".Shepherd::Common::urlify($prog->{language}->[0] =~ /(^[^,]*)/))
+#	  if ((defined $prog->{language}) && (defined $prog->{language}->[0]));
+	# &exact=y
+	# cast/crew
+
+	Shepherd::Common::log("programme ".$stats{programmes}.": \"$movie_title\" ($prog_duration minutes)");
+
+	# first search using everything we can...
+	my $orig_post_fields = join("",@search_fields);
+	my $post_fields;
+	my $found = 0;
+	while ((scalar(@search_fields) > 0) && (!$found)) {
+		if ($movie_subtitle) {
+		        $post_fields = "title=".Shepherd::Common::urlify($movie_title." ".$movie_subtitle);
+			$orig_post_fields = $post_fields;
+			push(@search_fields, $post_fields);
+		} else {
+			$post_fields = join("",@search_fields);
+		}
+
+		#
+		# first check if we have a previos cache entry for this
+		#
+		if (defined $data_cache->{series_id_lookup}->{$post_fields} and
+				defined $data_cache->{series_id_lookup}->{$post_fields}->{id}) {
+			if ($data_cache->{series_id_lookup}->{$post_fields}->{id} eq "-") {
+				# negatively cached
+				$stats{tvdb_lookup_used_negative_cache_entry}++;
+				undef $movie_subtitle;
+				pop(@search_fields);
+			} else {
+				# positive cache
+				$stats{tvdb_lookup_used_cache_entry}++;
+				$found = 1;
+			}
+			Shepherd::Common::log("  used (".($found ? "positive" : "negative")." cache) search: $post_fields");
+		} else {
+			#
+			# no cache, go look it up
+			#
+			&search_series($tvdb, $movie_title, $post_fields, $movie_year, $prog_duration);
+
+			# TVDb web site failed/returned unexpected result, just skip rest
+			goto END
+			  if (!defined $data_cache->{series_id_lookup}->{$post_fields} or
+					!defined $data_cache->{series_id_lookup}->{$post_fields}->{id});
+
+			if ($data_cache->{series_id_lookup}->{$post_fields}->{id} eq "-") {
+				# lookup failed.
+
+				# if it returned no hits, perhaps our search was too specific.
+				# make it less specific if we can
+				if ($data_cache->{series_id_lookup}->{$post_fields}->{num_choices} == 0) {
+					undef $movie_subtitle;
+					pop(@search_fields);
+				} else {
+					# search wasn't specific enough.  (more than 1 hit)
+
+					if ($movie_subtitle) {
+						# try again if subtitle in search
+						undef $movie_subtitle;
+						pop(@search_fields);
+					} else {
+						# skip ahead to simple search
+						# fill in less detailed searches or we fetch them next time
+						pop(@search_fields);
+						while (scalar(@search_fields) > 0) {
+							$post_fields = join("",@search_fields);
+							$data_cache->{series_id_lookup}->{$post_fields}->{last_fetched} = time;
+							$data_cache->{series_id_lookup}->{$post_fields}->{id} = '-';
+							$data_cache->{series_id_lookup}->{$post_fields}->{num_choices} = 1000;
+							pop(@search_fields);
+						}
+					}
+				}
+			} else {
+				# lookup succeeded
+				$found = 1;
+			}
+		}
+	}
+
+	goto END if (!$found);
+
+	$data_cache->{series_id_lookup}->{$orig_post_fields}->{id} = $data_cache->{series_id_lookup}->{$post_fields}->{id}
+			if ($post_fields ne $orig_post_fields);
+
+	my $movie_id = $data_cache->{series_id_lookup}->{$post_fields}->{id};
+
+	# no match or negative cache match - bail out
+	goto END if ((!defined $movie_id) || ($movie_id eq "-"));
+
+	#
+	# lookup movie details
+	# (either via previously cached entry or via an online TVDb lookup)
+	#
+
+	if (defined $data_cache->{series_lookup}->{$movie_id}) {
+		$stats{tvdb_movie_used_cache_entry}++;
+		Shepherd::Common::log("  used existing (cached) movie details: $movie_id");
+	} else {
+		&get_tvdb_movie_online($tvdb, $movie_title,$movie_id);
+		goto END if (!defined $data_cache->{series_lookup}->{$movie_id});
+		$stats{tvdb_movie_added_cache_entry}++;
+	}
+
+
+	#
+	# augment data
+	#
+
+	$data_cache->{series_lookup}->{$movie_id}->{last_lookup} = time;
+	$data_cache->{series_lookup}->{$movie_id}->{num_lookups}++;
+	goto END if (!defined $data_cache->{series_lookup}->{$movie_id}->{title});
+	my $tvdb_movie = $data_cache->{series_lookup}->{$movie_id};
+	$stats{added_tvdb_data}++;
+
+	if ($opt->{dont_augment_desc}) {
+
+		# if not a reasonable description, add anything we've got
+		if (!defined $prog->{desc} || !defined $prog->{desc}->[0] || !defined $prog->{desc}->[0]->[0] ||
+				 (length ($prog->{desc}->[0]->[0]) <= 20)) {
+			my $tvdb_desc = '';
+
+			$tvdb_desc .= $tvdb_movie->{tagline}."\n" if ($tvdb_movie->{tagline});
+			$tvdb_desc .= $tvdb_movie->{summary}."\n" if ($tvdb_movie->{summary});
+			$tvdb_desc .= $tvdb_movie->{plot} if ($tvdb_movie->{plot});
+
+			if ($tvdb_desc ne '') {
+				chomp $tvdb_desc;
+				$prog->{desc}->[0]->[0] = "" if (!defined $prog->{desc}->[0]->[0]);
+				$prog->{desc}->[0]->[0] .= "\n" if ($prog->{desc}->[0]->[0] ne "");
+				$prog->{desc}->[0]->[0] .= $tvdb_desc;
+			}
+		}
+	} else {
+		my $tvdb_desc = '';
+
+		# Unless we request --long-info, only add
+		# Tagline, Awards, and Trivia to the description.
+		# (Other data goes in appropriate fields.)
+
+		if ($opt->{long_info}) {
+		    $tvdb_desc .= sprintf " Title: %s",$tvdb_movie->{title};
+		    $tvdb_desc .= sprintf "  (%s)",$tvdb_movie->{year}
+			if (($tvdb_movie->{year}) && ($tvdb_movie->{year} > 0));
+		    $tvdb_desc .= "\n";
+
+		    $tvdb_desc .= sprintf " aka: %s\n",$tvdb_movie->{aka}
+			if (defined $tvdb_movie->{aka} && $tvdb_movie->{aka} ne "");
+		}
+
+		$tvdb_desc .= sprintf " Tagline: %s\n",$tvdb_movie->{tagline}
+		    if (defined $tvdb_movie->{tagline} && $tvdb_movie->{tagline} ne "");
+		
+		if ($opt->{long_info} || !defined $prog->{desc} || !defined $prog->{desc}->[0] ||
+				!defined $prog->{desc}->[0]->[0] || (length ($prog->{desc}->[0]->[0]) <= 20)) {
+		    $tvdb_desc .= sprintf " Summary: %s\n",$tvdb_movie->{summary}
+			if (defined $tvdb_movie->{summary} && $tvdb_movie->{summary} ne "");
+
+		    $tvdb_desc .= sprintf " Plot: %s\n",$tvdb_movie->{plot}
+			if (defined $tvdb_movie->{plot} && $tvdb_movie->{plot} ne "");
+		}
+
+		if ($opt->{long_info}) {
+		    $tvdb_desc .= sprintf " Rating: %s\n",$tvdb_movie->{rating}
+			if (defined $tvdb_movie->{rating} && $tvdb_movie->{rating} =~ /^\d+/);
+		}
+
+		$tvdb_desc .= sprintf " Original Air Date: %s\n",$tvdb_movie->{airdate}
+		    if (defined $tvdb_movie->{airdate} && $tvdb_movie->{airdate} ne "");
+
+		$tvdb_desc .= sprintf " Awards: %s\n",$tvdb_movie->{awards}
+		    if (defined $tvdb_movie->{awards} && $tvdb_movie->{awards} ne "");
+
+		$tvdb_desc .= sprintf " Trivia: %s\n",$tvdb_movie->{trivia}
+		    if (defined $tvdb_movie->{trivia} && $tvdb_movie->{trivia} ne "");
+		
+		if ($opt->{long_info}) {
+		    $tvdb_desc .= sprintf " Certifications: %s\n", join(', ', 
+			map { sprintf "%s (%s)", $tvdb_movie->{certifications}->{$_}, $_ } sort keys  %{$tvdb_movie->{certifications}})
+			    if (defined $tvdb_movie->{certifications});
+
+		    $tvdb_desc .= sprintf " Cast: %s\n", join(', ',
+			(ref $tvdb_movie->{cast} eq "ARRAY" ?
+			    map { sprintf "%s%s", @$_[0], (@$_[1] ? " as @$_[1]" : '') } @{$tvdb_movie->{cast}} :
+			    map { sprintf "%s%s", $_, ($tvdb_movie->{cast}->{$_} ? " as " . $tvdb_movie->{cast}->{$_} : '') } keys %{$tvdb_movie->{cast}}))
+				if (defined $tvdb_movie->{cast});
+
+		    $tvdb_desc .= sprintf " Directors: %s\n",
+			join(", ", ref($tvdb_movie->{directors}) eq "ARRAY" ?
+			    map(@$_[0], @{$tvdb_movie->{directors}}) : sort keys %{$tvdb_movie->{directors}})
+				if ($tvdb_movie->{directors});
+		    $tvdb_desc .= sprintf " Writers: %s\n",
+			join(", ", ref($tvdb_movie->{writers}) eq "ARRAY" ?
+			    map(@$_[0], @{$tvdb_movie->{writers}}) : sort keys %{$tvdb_movie->{writers}})
+				if ($tvdb_movie->{writers});
+
+		    $tvdb_desc .= sprintf " Runtime: %s\n",$tvdb_movie->{runtime}
+			if (defined $tvdb_movie->{runtime} && $tvdb_movie->{runtime} ne "");
+		    $tvdb_desc .= sprintf " Countries: %s\n",
+			join(", ",@{$tvdb_movie->{countries}})
+			    if (defined $tvdb_movie->{countries});
+		    $tvdb_desc .= sprintf " Languages: %s\n",
+			join(", ",@{$tvdb_movie->{languages}})
+			    if (defined $tvdb_movie->{languages});
+		    $tvdb_desc .= sprintf " Genres: %s\n",
+			join(", ",@{$tvdb_movie->{genres}})
+			    if (defined $tvdb_movie->{genres});
+
+		    $tvdb_desc .= sprintf " Goofs: %s\n",$tvdb_movie->{goofs}
+			if (defined $tvdb_movie->{goofs} && $tvdb_movie->{goofs} ne "");
+		    $tvdb_desc .= sprintf " Cover: %s\n",$tvdb_movie->{cover}
+			if (defined $tvdb_movie->{cover} && $tvdb_movie->{cover} ne "");
+		}
+
+		if ($tvdb_desc ne '') {
+		    chomp $tvdb_desc;
+		    if ($opt->{long_info}) {
+			$tvdb_desc = "TVDb augmented data:\n$tvdb_desc";
+		    } else {
+			$tvdb_desc = sprintf "(%s)", substr($tvdb_desc, 1);
+		    }
+		    $prog->{desc}->[0]->[0] = "" if (!defined $prog->{desc}->[0]->[0]);
+		    $prog->{desc}->[0]->[0] .= "\n\n" if ($prog->{desc}->[0]->[0] ne "");
+		    $prog->{desc}->[0]->[0] .= $tvdb_desc;
+		}
+	}
+
+	$prog->{date} = $tvdb_movie->{year} if ($tvdb_movie->{year} && !$prog->{date});
+	# $prog->{length} = $tvdb_movie->{runtime} if ($tvdb_movie->{runtime});
+
+	my $found_url = 0, my $found_cover = 0;
+	if (defined $prog->{url}) {
+		foreach my $url (@{($prog->{url})}) {
+			$found_url++ if (lc($url) eq lc("http://www.themoviedb.org/movie/".$movie_id));
+			$found_cover++ if (($tvdb_movie->{cover}) && (lc($url) eq lc($tvdb_movie->{cover})));
+		}
+	}
+	push (@{($prog->{url})},"http://www.themoviedb.org/movie/".$movie_id) if (!$found_url);
+	push (@{($prog->{url})},$tvdb_movie->{cover}) if (($tvdb_movie->{cover}) && (!$found_cover));
+
+	# quick hack by Max to get working again, March 2012.
+	if ($tvdb_movie->{rating} && $tvdb_movie->{rating_votes} > 100) {
+#	        $prog->{'star-rating'} = [ ] unless (ref $prog->{'star-rating'});
+	        $prog->{'star-rating'} = [ ];
+		push @{$prog->{'star-rating'}}, [ $tvdb_movie->{rating}, "themoviedb.org", undef ];
+
+#		my ($rating,$votes) = split(/ /,$tvdb_movie->{rating});
+#		if ($rating =~ /[\d\.\s]+\/[\d\.\s]+/) {
+#			# If there's already a star-rating, average the scores
+#			if (ref $prog->{'star-rating'} && $prog->{'star-rating'}->[0] =~ /[\d\.\s]+\/[\d\.\s]+/) {
+#				$rating = sprintf "%.1f/10", (eval($rating) + eval($prog->{'star-rating'}->[0])) * 5;
+#			}
+#			$prog->{'star-rating'} = [ $rating ];
+#		}
+	}
+
+	if ($tvdb_movie->{languages}) {
+		foreach my $lang (@{($tvdb_movie->{languages})}) {
+			if (defined $prog->{language}) {
+				$prog->{language}->[0] .= ", " . $lang
+					if ($prog->{language}->[0] !~ /$lang/i);
+			} else {
+				$prog->{language}->[0] = $lang;
+			}
+		}
+	}
+	# don't fill in XMLTV orig-language - mythtv ignores it
+	#print ("\nBEFORE ARRAY: ".dump($prog->{category})."\n");
+	#print ("AFTER ARRAY: ".dump($prog->{category})."\n\n");
+        push(@{($prog->{category})},["movie","en"]);
+	my @grep_array = grep { $_->[0] ne 'series' } @{$prog->{category}};
+	@{$prog->{category}} = @grep_array;
+
+	if (defined $tvdb_movie->{genres}) {
+		#my @grep_array = grep { $_->[0] ne 'series' } @{$prog->{category}};
+		#@{$prog->{category}} = @grep_array;
+
+		foreach my $genre (@{($tvdb_movie->{genres})}) {
+			my $found_genre = 0;
+			foreach my $category (@{($prog->{category})}) {
+				$found_genre++ if (lc($genre) eq lc($category->[0]));
+			}
+			push(@{($prog->{category})},[$genre, "en"]) if (!$found_genre);
+		}
+	}
+	#print ("AFTER ARRAY2: ".dump($prog->{category})."\n\n");
+
+	if (defined $tvdb_movie->{countries}) {
+		foreach my $country (@{($tvdb_movie->{countries})}) {
+			my $found_country = 0;
+			foreach my $c (@{($prog->{country})}) {
+				$found_country++ if (lc($country) eq lc($c->[0]));
+			}
+			push(@{($prog->{country})},[$country]) if (!$found_country);
+		}
+	}
+
+	if (defined $tvdb_movie->{airdate})
+	{
+		my ($season) = ($tvdb_movie->{airdate} =~ /Season\s+(\d+)/i);
+		my ($episode) = ($tvdb_movie->{airdate} =~ /Episode\s+(\d+)/i);
+		if ($season || $episode) {
+			my $xmltv_ns = ($season ? ($season - 1) : "") ." . ". ($episode ? ($episode - 1) : "") ." . 0";
+			$prog->{'episode-num'} = [ [ $xmltv_ns, 'xmltv_ns' ] ];
+		}
+	}
+
+	if (defined $tvdb_movie->{certifications}) {
+		# put a useful rating first
+		my $useful_rating;
+		foreach my $country ('Australia', 'New Zealand', 'USA', 'UK', 'Canada', 'Ireland',
+				'Singapore', 'Philippines', 'Taiwan') {
+			if ($tvdb_movie->{certifications}->{$country} &&
+					$tvdb_movie->{certifications}->{$country} ne 'Unrated' &&
+					$tvdb_movie->{certifications}->{$country} ne 'Not Rated' &&
+					$tvdb_movie->{certifications}->{$country} ne 'Approved') {
+				push(@{($prog->{rating})},[$tvdb_movie->{certifications}->{$country},$country,undef]);
+				$useful_rating = 1;
+				last;
+			}
+		}
+
+		# only return everything if long_info or no useful rating found
+		if ($opt->{long_info} || !$useful_rating) {
+			foreach my $cert (sort keys %{($tvdb_movie->{certifications})}) {
+				my $found_cert = 0;
+				foreach my $c (@{($prog->{rating})}) {
+					$found_cert++ if (lc($cert) eq lc($c->[1]));
+				}
+				push(@{($prog->{rating})},[$tvdb_movie->{certifications}->{$cert},$cert,undef])
+						if (!$found_cert);
+			}
+		}
+	}
+
+	if (defined $tvdb_movie->{cast}) {
+		foreach my $cast (ref($tvdb_movie->{cast}) eq "ARRAY" ?
+				map(@$_[0], @{$tvdb_movie->{cast}}) : sort keys %{$tvdb_movie->{cast}}) {
+			my $found_cast = 0;
+			if ((defined $prog->{credits}) && (defined $prog->{credits}->{actor})) {
+				foreach my $a (@{($prog->{credits}->{actor})}) {
+					$found_cast++ if (lc($cast) eq lc($a));
+				}
+			}
+			push(@{($prog->{credits}->{actor})},$cast) if (!$found_cast);
+		}
+	}
+
+	if (defined $tvdb_movie->{writers}) {
+		foreach my $cast (ref($tvdb_movie->{writers}) eq "ARRAY" ?
+				map(@$_[0], @{$tvdb_movie->{writers}}) : sort keys %{$tvdb_movie->{writers}}) {
+			my $found_cast = 0;
+			if ((defined $prog->{credits}) && (defined $prog->{credits}->{writer})) {
+				foreach my $w (@{($prog->{credits}->{writer})}) {
+					$found_cast++ if (lc($cast) eq lc($w));
+				}
+			}
+			push(@{($prog->{credits}->{writer})},$cast) if (!$found_cast);
+		}
+	}
+
+	if (defined $tvdb_movie->{directors}) {
+		foreach my $cast (ref($tvdb_movie->{directors}) eq "ARRAY" ?
+				map(@$_[0], @{$tvdb_movie->{directors}}) : sort keys %{$tvdb_movie->{directors}}) {
+			my $found_cast = 0;
+			if ((defined $prog->{credits}) && (defined $prog->{credits}->{director})) {
+				foreach my $d (@{($prog->{credits}->{director})}) {
+					$found_cast++ if (lc($cast) eq lc($d));
+				}
+			}
+			push(@{($prog->{credits}->{director})},$cast) if (!$found_cast);
+		}
+	}
+
+	if (defined $tvdb_movie->{cover}) {
+		$found_cover = 0;
+		if (defined $prog->{icon}) {
+			foreach my $cover (@{($prog->{icon})}) {
+				$found_cover++ if (lc($cover->{src}) eq lc($tvdb_movie->{cover}));
+			}
+		}
+		$prog->{icon}->[0]->{src} = $tvdb_movie->{cover} if (!$found_cover);
+	}
+
+	Shepherd::Common::cleanup($prog);
+	#print "prog now ".Dumper($prog);
+END:
+	$writer->write_programme($prog);
+}
+
+##############################################################################
+
+sub run_test
+{
+	$opt->{debug} = 1;
+	$opt->{fast} = 1;
+	Shepherd::Common::log("running test for: ".$opt->{test});
+
+	my $post_fields = "title=".Shepherd::Common::urlify($opt->{test});
+	$post_fields = $opt->{test};
+	&search_series($tvdb, $opt->{test},$post_fields);
+
+	die "lookup unsuccessful\n"
+	  if ((!defined $data_cache->{series_id_lookup}->{$post_fields}) ||
+	      ($data_cache->{series_id_lookup}->{$post_fields}->{id} eq "-"));
+
+	my $series_id = $data_cache->{series_id_lookup}->{$post_fields}->{id};
+	&get_tvdb_series_online($tvdb, $opt->{test},$series_id);
+#	print "Series details returned: ".Dumper($data_cache->{series_lookup}->{$series_id});
+	&search_episode_by_subtitle($tvdb, $series_id,$opt->{test_subtitle});
+
+	exit(0);
+}
+
+##############################################################################
