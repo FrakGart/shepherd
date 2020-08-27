@@ -15,8 +15,8 @@ reference	Debug/Simple.pm     0.10	2f0964ddb6cf6a5bb3e4f5878b747058cca33a2c	e89c
 #grabber         foxtel_swf          5.03	64b38cade7e38491a6712b3289887592d18b9f60	217292d82361ab4722e8f17dc678d9c448411366
 #grabber         abc_website         7.03	5b033781f567687e93c6cf785792bef96ac33125	31be91eb5ffdc65330e7b829f7a9194daa7f5a26
 #grabber         freeview            1.0.7	7d314b49651d2545c9f6852fcf9ed800e9b2cb00	745b10b7c474aec346cf57a374b264b2b764e137
-grabber         tv_grab_dvb             0.03    ffabf5683ca2e2d884a661a59a6f77d9843016e6        19cbc881113a19bee13ece3fe7bfc93890c912cf
-grabber         xmltv_net             0.01	b9a6a71d9e81be4671fd24ec6d12ad2e4b9f2212	4bc8c80dd8a5205b4f1df421857ecbc8e2f119b1
+grabber         tv_grab_dvb             0.04    ffabf5683ca2e2d884a661a59a6f77d9843016e6	7bf5469c300b7d46e6ec958b19bd293a27b93a9a
+grabber         xmltv_net             0.02	b9a6a71d9e81be4671fd24ec6d12ad2e4b9f2212	87966fc11d8bccb1aa3b704618b9f14e611241fc
 #reconciler      reconciler_mk2      0.58	53c4c0647abf244d0b22e7620bf1247e37abf689	8f8ee5f905bf4e844b67a557baa2b0403fb263c4
 reconciler      reconciler_mk3          0.61    53c4c0647abf244d0b22e7620bf1247e37abf689        8494dead153d215264c5a552c081d73694c29b3c
 #postprocessor   metacritic          1.1	5e30f527c03bbddc31a2d649c5c5c50f63848c16	59fe1817de57012e3d449e807f3941ff9e683973
@@ -24,5 +24,6 @@ postprocessor   augment_timezone    0.30	df61b40c0943bf7568442496081a4e90d9a30fe
 postprocessor	add_channel_icons   0.21	a4d3d745dfcbd02fdba7c979e7990f61efcc3206	ee59ff0da71d64a79ef04bbacef6f53644aa780e
 postprocessor   brownie_postprocess     0.34    67e4588db4987142f02f656db186367bd80c7c8c        fc862cadc95de513764fc4d307930300bac9bee2
 #postprocessor	the_movie_db_augment  1.0	48e20d775acf9efb58f4f48002f20aff54154808	feaac994c23554098639494a62c8483bcd91e594
-postprocessor   tmdb_augment_data       0.10    34d7c122226fae9cec9a6283ae509e2e58baf9a9        7a02cf6bf0370e7007d8e4e83e7e79f94acf9e52
+postprocessor   tmdb_augment_data       0.11    34d7c122226fae9cec9a6283ae509e2e58baf9a9	d9d4ad5df00e7dfa705ad6b32280097c84f268f8
+postprocessor	zzz_imdb_ratings	0.01	34c288d4dcd03cc1277d77bd586c50f23f11bb94	c71d473d69eac76bdb59108be79d1d1021133b37
 END
