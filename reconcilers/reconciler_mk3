@@ -96,7 +96,7 @@ $| = 1;
 BEGIN { *CORE::GLOBAL::die = \&my_die; }
 
 my $progname = "reconciler_mk3";
-my $version = "0.61";
+my $version = "0.62";
 
 use LWP::UserAgent;
 use XMLTV;
@@ -176,7 +176,7 @@ $reclogic{warn_on_invalid_time_in_prog} = 1;		# do warn on programme with bad ti
 $reclogic{warn_on_overlapping_programmes_always} = 0;	# don't warn on all overlapping programmes from same source
 $reclogic{warn_on_overlapping_programmes_for_different_title} = 1; # do warn on overlapping programmes from same source with different names
 $reclogic{warn_on_invalid_time_in_prog} = 1;		# do warn on a programme with a duration that is too long
-$reclogic{warn_on_tba_prog} = 1;			# do warn on encountering To Be Advised shows
+$reclogic{warn_on_tba_prog} = 0;			# do warn on encountering To Be Advised shows
 
 #
 # debug messages
@@ -361,7 +361,6 @@ foreach my $data (@{($in->{datafile_order})}) {
 	$grabber_num++;
 }
 &log(1,"reconciling with the following data-source preference: $grabber_order");
-
 &reconcile;
 
 &write_programmes;
@@ -1139,6 +1138,10 @@ sub channel_cb( $ )
 		return;
 	}
 
+	if (defined $c->{'icon'}) {
+		$in->{channels}->{$chan}->{icon} = $c->{'icon'};
+	}
+
 	if (defined $c->{'display-name'} && defined $c->{'display-name'}->[0]) {
 		foreach my $ch_block ($c->{'display-name'}->[0]) {
 			my ($desc,$lang) = ($ch_block->[0],$ch_block->[1]);
@@ -1227,7 +1230,7 @@ sub programme_cb( $ )
 	}
 
 	# skip if 'To Be Advised' or 'TBA'
-	if ($prog_title =~ /^to be advised$/i or $prog_title =~ /^tba$/i)
+	if ($prog_title =~ /^to be advised$/i or $prog_title =~ /^tba$/i or $prog_title =~ /^to be announced$/i)
 	{
 	    &log($reclogic{warn_on_tba_prog},
 		 (sprintf "WARNING: ignoring TBA programme '%s' on channel '%s' from %s: start '%s' stop '%s'; ignored.",
@@ -1238,41 +1241,45 @@ sub programme_cb( $ )
 	}
 
         if ($prog->{'title'}->[0]->[0] =~ / \- Premiere$/) {
-                print "$prog->{'title'}->[0]->[0], removing - Premiere\n";
+		&log(1,"$prog->{'title'}->[0]->[0], removing - Premiere");
                 $prog->{'title'}->[0]->[0] =~ s/ - Premiere$//;
                 $prog->{'premiere'}->[0] = "premiere";
         }
 
         if ($prog->{'title'}->[0]->[0] =~ / \- New$/) {
-                print "$prog->{'title'}->[0]->[0], removing - New\n";
+		&log(1,"$prog->{'title'}->[0]->[0], removing - New");
                 $prog->{'title'}->[0]->[0] =~ s/ - New$//;
         }
 
+        if ($prog->{'title'}->[0]->[0] =~ / \(NEW\)$/) {
+		&log(1,"$prog->{'title'}->[0]->[0], removing (NEW)");
+                $prog->{'title'}->[0]->[0] =~ s/ \(NEW\)$//;
+        }
+
         if ($prog->{'title'}->[0]->[0] =~ /^Live: /) {
-                print "$prog->{'title'}->[0]->[0], removing Live:\n";
+		&log(1,"$prog->{'title'}->[0]->[0], removing Live:");
                 $prog->{'title'}->[0]->[0] =~ s/^Live: //;
         }
 
         if ($prog->{'title'}->[0]->[0] =~ /^LIVE: /) {
-                print "$prog->{'title'}->[0]->[0], removing LIVE:\n";
+		&log(1,"$prog->{'title'}->[0]->[0], removing LIVE:");
                 $prog->{'title'}->[0]->[0] =~ s/^LIVE: //;
         }
 
         if ($prog->{'title'}->[0]->[0] =~ / \(New Series Premiere\)$/) {
-                print "$prog->{'title'}->[0]->[0], removing (New Series Premiere)\n";
+		&log(1,"$prog->{'title'}->[0]->[0], removing (New Series Premiere)");
                 $prog->{'title'}->[0]->[0] =~ s/ \(New Series Premiere\)//;
                 $prog->{'premiere'}->[0] = "premiere";
         }
 
         if ($prog->{'title'}->[0]->[0] =~ / \((\d\d\d\d)\)$/) {
-                print "$prog->{'title'}->[0]->[0], removing year, setting date to $1\n";
+		&log(1,"$prog->{'title'}->[0]->[0], removing year, setting date to $1");
                 $prog->{'date'} = int($1);
-
                 $prog->{'title'}->[0]->[0] =~ s/ \(\d\d\d\d\)$//;
         }
 
         if ($prog->{'title'}->[0]->[0] =~ / \(Includes Sneak Peek.*\)$/) {
-                print "$prog->{'title'}->[0]->[0], removing (Includes Sneak Peek...)\n";
+		&log(1,"$prog->{'title'}->[0]->[0], removing (Includes Sneak Peek..)");
                 $prog->{'title'}->[0]->[0] =~ s/ \(Includes Sneak Peek.*\)//;
         }
 
@@ -1316,7 +1323,7 @@ sub programme_cb( $ )
 		my $warn = (($reclogic{warn_on_overlapping_programmes_always}) ||
 		            (($reclogic{warn_on_overlapping_programmes_for_different_title}) &&
 			     ($prog_title ne $in->{dupcheck}->{$source}->{$prog_chan}->{$prog_key})));
-		&log($warn,(sprintf "WARNING: file contained more than one programme in same timeslot: channel '%s' start %s, stop %s, programs \"%s\" and \"%s\"; ignored.",
+		&log($warn,(sprintf "WARNING: source $source contained more than one programme in same timeslot: channel '%s' start %s, stop %s, programs \"%s\" and \"%s\"; ignored.",
 			$prog_chan,
 			(strftime "%a%e%b%H:%M",localtime($t1)),
 			(strftime "%a%e%b%H:%M",localtime($t2)),
@@ -1371,8 +1378,11 @@ sub write_channels
 			$lang_list->[$num_langs]->[1] = $lang;
 			$num_langs++;
 		}
-
-		$w->write_channel( { 'id' => $chan_id, 'display-name' => $lang_list } );
+		if (defined $this_chan->{icon}) {
+			$w->write_channel( { 'id' => $chan_id, 'display-name' => $lang_list, 'icon' => $this_chan->{icon} } );
+		} else {
+			$w->write_channel( { 'id' => $chan_id, 'display-name' => $lang_list } );
+		}
 	}
 }
 
@@ -1418,6 +1428,15 @@ sub choose_title
 	my $channel = $m->[0]->{channel};
 	my $title_start = $m->[0]->{start_epoch};
 	my $title_duration = $m->[0]->{stop_epoch} - $m->[0]->{start_epoch};
+
+	my $title = $m->[0]->{title}->[0]->[0];
+	my $lang = $m->[0]->{title}->[0]->[1];
+
+	&log($reclogic{debug_choose_title},(sprintf 
+	  "choose_title: using first title \"%s\" in lang %s",
+	  $title, (defined $lang ? $lang : "(undef)")));
+	return ($title, $lang);
+
 
 	# 0. first gather title from "preferred grabber" if we have it for
 	#    this programme
