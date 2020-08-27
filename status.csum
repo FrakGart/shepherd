@@ -24,6 +24,6 @@ postprocessor   augment_timezone    0.30	df61b40c0943bf7568442496081a4e90d9a30fe
 postprocessor	add_channel_icons   0.21	a4d3d745dfcbd02fdba7c979e7990f61efcc3206	ee59ff0da71d64a79ef04bbacef6f53644aa780e
 postprocessor   brownie_postprocess     0.35    67e4588db4987142f02f656db186367bd80c7c8c        5cc3bdd2ee1e92297326816cafb41b956d711df3
 #postprocessor	the_movie_db_augment  1.0	48e20d775acf9efb58f4f48002f20aff54154808	feaac994c23554098639494a62c8483bcd91e594
-postprocessor   tmdb_augment_data       0.11    34d7c122226fae9cec9a6283ae509e2e58baf9a9	d9d4ad5df00e7dfa705ad6b32280097c84f268f8
+postprocessor   tmdb_augment_data       0.12    34d7c122226fae9cec9a6283ae509e2e58baf9a9	6580f552fdc7656ae1484d93857b130cb5e51df5
 postprocessor	zzz_imdb_ratings	0.02	34c288d4dcd03cc1277d77bd586c50f23f11bb94	282611495553f1a1b4c003192dc8f8f89d282301
 END

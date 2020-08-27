@@ -24,7 +24,7 @@ use strict;
 use warnings;
 
 my $progname = "tmdb_augment_data";
-my $version = "0.11";
+my $version = "0.12";
 
 use XMLTV;
 use POSIX qw(strftime mktime);
@@ -802,7 +802,9 @@ sub programme_cb( $ )
 			if (defined @{$episode}[1] && @{$episode}[1] eq "imdb.com") {
 				
 				$imdb_id = @{$episode}[0];
-				$imdb_id =~ s/title\///;
+				if ( $imdb_id =~ m/(tt\d+)/ ) {
+					$imdb_id = $1;
+				}
 				Shepherd::Common::log("   found imdb id: \"$movie_title\" ($imdb_id)");
 
 				# Check cache
