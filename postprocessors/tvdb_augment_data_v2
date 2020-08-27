@@ -290,7 +290,7 @@ sub write_cache
 ##############################################################################
 # use the online TVDb "search" to find match
 
-sub search_series
+sub search_series_title
 {
 	my ($tvdb, $title) = @_;
 
@@ -665,7 +665,7 @@ sub programme_cb( $ )
 			#
 			# no cache, go look it up
 			#
-			&search_series($tvdb, $movie_title, $post_fields, $movie_year, $prog_duration);
+			&search_series_title($tvdb, $movie_title, $post_fields, $movie_year, $prog_duration);
 
 			# TVDb web site failed/returned unexpected result, just skip rest
 			goto END
@@ -1027,7 +1027,7 @@ sub run_test
 
 	my $post_fields = "title=".Shepherd::Common::urlify($opt->{test});
 	$post_fields = $opt->{test};
-	&search_series($tvdb, $opt->{test},$post_fields);
+	&search_series_title($tvdb, $opt->{test});
 
 	die "lookup unsuccessful\n"
 	  if ((!defined $data_cache->{series_id_lookup}->{$post_fields}) ||

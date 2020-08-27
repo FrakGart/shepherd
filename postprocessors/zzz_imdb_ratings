@@ -46,14 +46,19 @@
 
 use strict;
 use warnings;
-my $progname = "brownie_postprocess";
-my $version = "0.35";
+my $progname = "zzz_imdb_ratings";
+my $version = "0.01";
 
 use XMLTV;
 use POSIX qw(strftime mktime);
 use Getopt::Long;
 use IO::File;
 use Data::Dumper;
+use LWP::Simple;
+use IO::Uncompress::Gunzip qw(gunzip $GunzipError) ;
+use Text::CSV;
+use Shepherd::Common;
+
 
 $| = 1;
 my %stats;
@@ -63,9 +68,14 @@ my $opt = { };
 $opt->{output_file} =	"output.xmltv";
 $opt->{debug} =			0;
 
+my $ratings_tsv_file = "title.ratings.tsv";
+my $ratings_tsv_url = "https://datasets.imdbws.com/title.ratings.tsv.gz";
+my %ratings_data;
+
 # parse command line
 GetOptions(
 	'output=s'		=> \$opt->{output_file},
+	'mysql_file=s'		=> \$opt->{mysql_file},
 
 	'region=i'		=> \$opt->{region},
 	'days=i'		=> \$opt->{days},		# ignored
@@ -73,6 +83,8 @@ GetOptions(
 	'timezone=s'		=> \$opt->{timezone},		# ignored
 	'channels_file=s'	=> \$opt->{channels_file},
 	'config-file=s'		=> \$opt->{configfile},		# ignored
+
+	'test=s'		=> \$opt->{test},
 
 	'help'			=> \$opt->{help},
 	'verbose'		=> \$opt->{help},
@@ -83,10 +95,9 @@ GetOptions(
 
 printf "%s v%s\n",$progname,$version;
 
-
 if ($opt->{version} || $opt->{desc} || $opt->{help} || $opt->{ready} ||
     $opt->{output_file} eq "") {
-	printf "Brownie's Postprocessor\n" if $opt->{desc};
+	printf "Add IMDB ratings\n" if $opt->{desc};
 
 	printf "$progname is ready for operation.\n" if ($opt->{ready});
 
@@ -105,6 +116,17 @@ EOF
 	exit(0);
 }
 
+
+my $check = &check_ratings_file;
+unless (!$check) { $check = &read_ratings_file; }
+
+if (!$check) {
+	print("No or unreadable ratings file, not modifying inputs.\n");
+}
+
+&run_test if (defined $opt->{test});
+
+
 my %writer_args = ( encoding => 'ISO-8859-1' );
 my $fh = new IO::File(">".$opt->{output_file}) || die "can't open $opt->{output_file} for writing: $!";
 $writer_args{OUTPUT} = $fh;
@@ -116,7 +138,11 @@ $writer->start( {
 
 foreach my $file (@ARGV) {
 	printf " - parsing: %s\n", ($file eq "-" ? "(from-stdin, hit control-D to finish)" : $file);
-	XMLTV::parsefiles_callback(undef, undef, \&channel_cb,\&programme_cb, $file);
+	if ($check) {
+		XMLTV::parsefiles_callback(undef, undef, \&channel_cb,\&programme_cb, $file);
+	} else {
+		XMLTV::parsefiles_callback(undef, undef, \&channel_cb,\&programme_nochange, $file);
+	}
 }
 
 $writer->end();
@@ -129,6 +155,91 @@ printf "\n";
 
 exit(0);
 
+sub download_ratings_file
+{
+	my $code = getstore($ratings_tsv_url, $ratings_tsv_file.".gz");
+	if ($code != 200) {
+		print("Download failed...");
+		return 0;
+	}
+	unless (-r $ratings_tsv_file) { unlink ($ratings_tsv_file); }
+
+	gunzip $ratings_tsv_file.".gz" => $ratings_tsv_file
+		or print("gunzip failed: $GunzipError\n") and return 0;
+	print ("Removing $ratings_tsv_file.gz file\n");
+	unlink($ratings_tsv_file.".gz");
+	return 1;		
+}
+
+#############################################################################
+# check ratings file
+# if ratings db not exists or
+#    ratings db older than 1 month
+#       download new ratings db file
+#
+
+sub check_ratings_file
+{
+	unless (-r $ratings_tsv_file) {
+		print("Ratings file doesn't exist, downloading ...\n");
+		&download_ratings_file
+			or return 0;
+	}
+
+	my $last_update_time = (stat($ratings_tsv_file))[9];
+	my $now = time();
+	my $timediff_days = ($now - $last_update_time)/60/60/24;
+
+	unless ($timediff_days < 30) {
+		print("Ratings file older than 1 month, downloading ...\n");
+		&download_ratings_file
+			or return 0;
+	}
+
+	return 1;
+}
+
+sub read_ratings_file
+{
+	print("Reading ratings file ....\n");
+	my $csv = Text::CSV->new ({ binary => 1 , sep_char => "\t"});
+	if (!defined $csv) {
+		print("Didn't create CSV reader\n");
+		return 0;
+	}
+	open my $fh, "<", $ratings_tsv_file 
+		or return 0;
+	my @cols = @{$csv->getline ($fh)};
+	$csv->column_names (@cols);
+	while (my $row = $csv->getline_hr ($fh)) {
+		$ratings_data{$row->{'tconst'}} = { 'averageRating' => $row->{'averageRating'}, 'numVotes' => $row->{'numVotes'} } ;
+	}
+	return 1;
+}
+
+#############################################################################
+# search imdb id
+#
+
+sub get_imdb_rating 
+{
+	my ($imdb_id) = @_;
+	my $rating;
+	my $rating_count;
+
+	if (!defined $imdb_id) {
+		print("get_imdb_rating called with no IMDB ID\n");
+		return 0;
+	}
+
+	if (!defined $ratings_data{$imdb_id}) {
+		print("No rating found\n");
+		return 0;
+	}
+
+	return $ratings_data{$imdb_id};
+}
+
 ##############################################################################
 
 sub channel_cb( $ )
@@ -140,59 +251,56 @@ sub channel_cb( $ )
 
 ##############################################################################
 
+sub programme_nochange( $ )
+{
+	my $prog=shift;
+	$writer->write_programme($prog);
+} 
+
+
 sub programme_cb( $ )
 {
 	my $prog=shift;
 
 	#print Dumper($prog);
 
-	if ($prog->{'title'}->[0]->[0] =~ / \- Premiere$/) {
-		print "$prog->{'title'}->[0]->[0], removing - Premiere\n";
-		$prog->{'title'}->[0]->[0] =~ s/ - Premiere$//;
-		$prog->{'premiere'}->[0] = "premiere";
-	}
+	if (defined $prog->{'episode-num'} && (scalar @{$prog->{'episode-num'}}) >= 1) {
+		foreach my $episode (@{$prog->{'episode-num'}}) {
+			if (defined @{$episode}[1] && @{$episode}[1] eq "imdb.com") {
 
-	if ($prog->{'title'}->[0]->[0] =~ / \- New$/) {
-		print "$prog->{'title'}->[0]->[0], removing - New\n";
-		$prog->{'title'}->[0]->[0] =~ s/ - New$//;
-	}
+				my $imdb_id = @{$episode}[0];
+				$imdb_id =~ s/title\///;
+				Shepherd::Common::log("   found imdb id: $prog->{'title'}->[0]->[0] ($imdb_id)");
 
-	if ($prog->{'title'}->[0]->[0] =~ /^Live: /) {
-		print "$prog->{'title'}->[0]->[0], removing Live:\n";
-		$prog->{'title'}->[0]->[0] =~ s/^Live: //;
-	}
+				my $rating = &get_imdb_rating($imdb_id);
 
-	if ($prog->{'title'}->[0]->[0] =~ /^LIVE: /) {
-		print "$prog->{'title'}->[0]->[0], removing Live:\n";
-		$prog->{'title'}->[0]->[0] =~ s/^LIVE: //;
-	}
+				if (defined $rating != 0 && $rating != 0) {
+					# print(Dumper($rating));
+					Shepherd::Common::log("   found rating: $rating->{'averageRating'}/10 ($rating->{'numVotes'})");
+					$prog->{'star-rating'} = [ ];
+					if ($rating->{'numVotes'} > 10000) {
+						push @{$prog->{'star-rating'}}, [ $rating->{'averageRating'}."/10", "imdb.com", undef ];
+					}
 
-	if ($prog->{'title'}->[0]->[0] =~ / \(New Series Premiere\)$/) {
-		print "$prog->{'title'}->[0]->[0], removing (New Series Premiere)\n";
-		$prog->{'title'}->[0]->[0] =~ s/ \(New Series Premiere\)//;
-		$prog->{'premiere'}->[0] = "premiere";
-	}
-
-	if ($prog->{'title'}->[0]->[0] =~ / \((\d\d\d\d)\)$/) {
-		print "$prog->{'title'}->[0]->[0], removing year, setting date to $1\n";
-		$prog->{'date'} = int($1);
-
-		$prog->{'title'}->[0]->[0] =~ s/ \(\d\d\d\d\)$//;
-	}
-
-        if (defined $prog->{'category'}) {
-                foreach my $prog_category (@{($prog->{'category'})}) {
-			#print "$prog_category->[0]\n";
-			if ($prog_category->[0] =~ /movie/i && !($prog_category->[0] eq "movie")  ) {
-				print "$prog->{'title'}->[0]->[0], ";
-				print "Changing $prog_category->[0] to movie\n";
-				$prog_category->[0] = 'movie';
-				#delete $prog->{'episode-num'};
+				}
 
 			}
-                }
-        }
-	#print Dumper($prog);
+		}
+	}
+
+	print(Dumper($prog));
 
 	$writer->write_programme($prog);
 } 
+
+
+sub run_test
+{
+	Shepherd::Common::log("running test for: ".$opt->{test});
+
+	my $rating = &get_imdb_rating($opt->{test});
+
+	print($rating->{'averageRating'}."/10 (".$rating->{'numVotes'}.")\n");
+
+        exit(0);
+}

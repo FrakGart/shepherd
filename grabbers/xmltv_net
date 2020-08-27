@@ -28,7 +28,7 @@ my %channel_map = (
 #        '2.yourtv.com.au' => 'ABC',
         '20.yourtv.com.au' => 'abchd.shepherd.au',
 #        '21.yourtv.com.au' => 'ABC',
-        '22.yourtv.com.au' => 'abccommedy/abckids.shepherd.au',
+        '22.yourtv.com.au' => 'abccomedy/abckids.shepherd.au',
         '23.yourtv.com.au' => 'abcme.shepherd.au',
         '24.yourtv.com.au' => 'abcnews.shepherd.au',
 #        '25.yourtv.com.au' => 'ABC Local Radio',
@@ -88,7 +88,7 @@ my $writer;
 my %stats;
 my $o;
 
-Shepherd::Common::program_begin(\$o, "xmltv_net grabber", "0.01", \%stats);
+Shepherd::Common::program_begin(\$o, "xmltv_net", "0.02", \%stats);
 &start_writing_xmltv();
 #my ($channels, $opt_channels, $gaps) =();
 

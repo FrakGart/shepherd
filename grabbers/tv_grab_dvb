@@ -31,16 +31,21 @@ my $writer;
 my %stats;
 my $o;
 
-Shepherd::Common::program_begin(\$o, "tv_grab_dvb grabber", "0.03", \%stats);
+Shepherd::Common::program_begin(\$o, "tv_grab_dvb", "0.04", \%stats);
 &start_writing_xmltv();
 #my ($channels, $opt_channels, $gaps) =();
-#my $channel_xmlid; 
+my $channel_xmlid; 
 
 ($channels, $opt_channels, $gaps) = Shepherd::Common::read_channels($o);
+my %channel_map;
+$channel_map{$_} = 1 foreach (values %$channels);
+#print(dump(%channel_map));
+#exit;
 #dump($channels);
 #dump($opt_channels);
+
 # first write the channel names and id's
-while (my ($name, $num) = each (@channels)) {
+while (my ($name, $num) = each (%$channels)) {
      if ($channels->{$name} || $opt_channels->{$name}) {
        $channel_xmlid = $channels->{$name} || $opt_channels->{$name};
        $writer->write_channel( {'display-name' => [[ "$name", $o->{lang} ]], 'id' => $channel_xmlid } );
@@ -101,7 +106,55 @@ sub get_data
         # strip the cruft from the source xml, we only want the programs.
         my ($encoding, $credits, $ch, $progs) = @$listing;
         foreach (@$progs) {
+		next unless defined $channel_map{$_->{channel}};
 #                $_->{channel} = $channel_xmlid;
+
+	        if ($_->{'title'}->[0]->[0] =~ / \- Premiere$/) {
+        	        Shepherd::Common::log("Modify Title [ $_->{'title'}->[0]->[0] ] - removing - Premiere");
+	                $_->{'title'}->[0]->[0] =~ s/ - Premiere$//;
+                	$_->{'premiere'}->[0] = "premiere";
+        	}
+
+	        if ($_->{'title'}->[0]->[0] =~ / \- New$/) {
+                	Shepherd::Common::log("Modify Title [ $_->{'title'}->[0]->[0] ] - removing - New");
+        	        $_->{'title'}->[0]->[0] =~ s/ - New$//;
+	        }
+
+        	if ($_->{'title'}->[0]->[0] =~ / \(NEW\)$/) {
+	                Shepherd::Common::log("Modify Title [ $_->{'title'}->[0]->[0] ] - removing (NEW)");
+                	$_->{'title'}->[0]->[0] =~ s/ \(NEW\)$//;
+        	}
+
+	        if ($_->{'title'}->[0]->[0] =~ /^Live: /) {
+                	Shepherd::Common::log("Modify Title [ $_->{'title'}->[0]->[0] ] - removing Live:");
+        	        $_->{'title'}->[0]->[0] =~ s/^Live: //;
+	        }
+
+        	if ($_->{'title'}->[0]->[0] =~ /^LIVE: /) {
+	                Shepherd::Common::log("Modify Title [ $_->{'title'}->[0]->[0] ] - removing LIVE:");
+                	$_->{'title'}->[0]->[0] =~ s/^LIVE: //;
+        	}
+
+	        if ($_->{'title'}->[0]->[0] =~ / \(New Series Premiere\)$/) {
+        	        Shepherd::Common::log("Modify Title [ $_->{'title'}->[0]->[0] ] - removing (New Series Premiere)");
+	                $_->{'title'}->[0]->[0] =~ s/ \(New Series Premiere\)//;
+                	$_->{'premiere'}->[0] = "premiere";
+        	}
+	        if ($_->{'title'}->[0]->[0] =~ / \((\d\d\d\d)\)$/) {
+                	Shepherd::Common::log("Modify Title [ $_->{'title'}->[0]->[0] ] - removing year, setting date to $1");
+        	        $_->{'date'} = int($1);
+	                $_->{'title'}->[0]->[0] =~ s/ \(\d\d\d\d\)$//;
+        	}
+
+	        if ($_->{'title'}->[0]->[0] =~ / \(Includes Sneak Peek.*\)$/) {
+        	        Shepherd::Common::log("Modify Title [ $_->{'title'}->[0]->[0] ] - removing (Includes Sneak Peek..)");
+	                $_->{'title'}->[0]->[0] =~ s/ \(Includes Sneak Peek.*\)//;
+		}
+
+		if (defined $_->{'sub-title'} && $_->{'sub-title'}->[0]->[0] eq $_->{'title'}->[0]->[0]) {
+			Shepherd::Common::log("Subtitle same as title [ $_->{'title'}->[0]->[0] ] - removing subtitle");
+			delete($_->{'sub-title'});
+		}
                 $writer->write_programme($_);
         }
                                                                                                                                  

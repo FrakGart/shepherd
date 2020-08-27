@@ -24,7 +24,7 @@ use strict;
 use warnings;
 
 my $progname = "tmdb_augment_data";
-my $version = "0.10";
+my $version = "0.11";
 
 use XMLTV;
 use POSIX qw(strftime mktime);
@@ -93,6 +93,7 @@ GetOptions(
 	'test_year=s'		=> \$opt->{test_year},
 	'test_duration=s'	=> \$opt->{test_duration},
 	'test_desc=s'		=> \$opt->{test_desc},
+	'test_imdb=s'		=> \$opt->{test_imdb},
 	'simpletest=s'		=> \$opt->{simpletest},
 	'set=s'			=> \$opt->{set},
 	'verbose'		=> \$opt->{help},
@@ -161,6 +162,7 @@ my $tmdb = TMDB->new( apikey => $opt->{apikey} );
 
 
 &run_test if (defined $opt->{test});
+&run_test_imdb if (defined $opt->{test_imdb});
 &set_settings if (defined $opt->{set});
 
 # set defaults
@@ -391,68 +393,113 @@ sub fuzzy_description_match
 ##############################################################################
 # use the online TMDb "search" to find match
 
+sub search_tmdb_online_imdb
+{
+	my ($tmdb, $imdb, $movie_title) = @_;
+	
+	my $results = $tmdb->search->find(id=> $imdb, source => 'imdb_id');
+	$data_cache->{movie_id_lookup}->{$imdb}->{last_fetched} = time;
+
+	my $num_results = scalar @{$results->{movie_results}};
+	if (defined $results->{movie_results} && $num_results == 1 ) {
+		#print(dump($results->{movie_results}[0]->{original_title}));
+		$data_cache->{movie_id_lookup}->{$imdb}->{id} = $results->{movie_results}[0]->{id};
+		$stats{tmdb_lookup_added_positive_cache_entry}++;
+	} else {
+		Shepherd::Common::log("    online search failed: wanted 1 match, got $num_results matches.");
+		# negatively cache our failed lookup
+		$data_cache->{movie_id_lookup}->{$imdb}->{id} = "-";
+		$data_cache->{movie_id_lookup}->{$imdb}->{num_choices} =
+		  $num_results;
+	}	
+}
+
+
+##############################################################################
+# use the online TMDb "search" to find match
+
 sub search_tmdb_online
 {
-	my ($tmdb, $title, $post_fields, $movie_year, $prog_duration, $prog_description) = @_;
+	my ($tmdb, $title, $movie_year, $prog_duration, $prog_description) = @_;
 	my $standardTitle = standardize_title($title);
 
 	if ($stats{failed_online_tmdb_lookup} and $stats{failed_online_tmdb_lookup} >= 3) {
-		Shepherd::Common::log("too many failed lookups to online TMDb search for '$title' with $post_fields");
+		Shepherd::Common::log("too many failed lookups to online TMDb search for '$title'");
 		return;
 	}
 
-	Shepherd::Common::log("  online TMDb search for '$title' with $post_fields");
+	my $cache_key;
+	if (defined $movie_year) {
+		$cache_key = $title ." ".$movie_year;
+	} else {
+		$cache_key = $title;
+	}
+
+	Shepherd::Common::log("  online TMDb search for '$title'");
 
 	my @results = $tmdb->search->movie($title);
-	$data_cache->{movie_id_lookup}->{$post_fields}->{last_fetched} = time;
+	$data_cache->{movie_id_lookup}->{$cache_key}->{last_fetched} = time;
 	my $description_match = 0;
 	my $urls_found = 0;
 	my %urls;
-	foreach my $result (@results) {
-		#print(dump($result));
-		#print("$standardTitle\n");
-		#print("$standardResultTitle\n");
-		my $standardResultTitle = standardize_title($result->{title});
-		my $standardOriginalTitle = standardize_title($result->{original_title});
-		next unless ($standardResultTitle =~ /^$standardTitle$/i || $standardOriginalTitle =~ /^$standardTitle$/i);
 
-		if (defined $data_cache->{movie_lookup}->{$result->{id}}) {
-                	$stats{tmdb_movie_used_cache_entry}++;
-		} else {
-		        &get_tmdb_movie_online($tmdb, $title, $result->{id});
-		}
+	Shepherd::Common::log("  online TMDb search for '$title' with year + fuzzy description match") 
+		if defined $prog_description && defined $movie_year;
+	Shepherd::Common::log("  online TMDb search for '$title' with fuzzy description match") 
+		if defined $prog_description;
 
-		if (defined $data_cache->{movie_lookup}->{$result->{id}}->{runtime} && defined $prog_duration &&
-			$data_cache->{movie_lookup}->{$result->{id}}->{runtime} > $prog_duration) {
-			next;
-		}
-		#print "Possible Candidate: ".Dumper($data_cache->{movie_lookup}->{$result->{id}});
+	if (defined $prog_description) {
 
-		#$data_cache->{movie_lookup}->{$movie_id};
-
-		my $found_year = 0;
-		#print("Release Date: ".$result->{release_date}."\n");
-		if (defined $result->{release_date} && $result->{release_date} =~ /^((19|20)\d\d)/) {
-			$found_year = $1;
-		}
-		my $desc_match = 0;
-		fuzzy_description_match($prog_description, $result->{overview}, $result->{id}) if defined $prog_description;
-		print ("    Movie year: ".dump($movie_year).", Found Year: ".dump($found_year)."\n");
-		if ($desc_match && (!$movie_year || ($found_year && ( abs($movie_year - $found_year) <= 1))) ) {
-			$urls{$result->{id}}++;
-			$urls_found++ if ($urls{$result->{id}} == 1);
-			if (defined $result->{release_date}) {
-				printf( "  %s:\t%s (%s)\n",
-					$result->{id}, $result->{title},
-					split( /-/, $result->{release_date}, 1 ) );
+		foreach my $result (@results) {
+			#print(dump($result));
+			#print("$standardTitle\n");
+			#print("$standardResultTitle\n");
+			my $standardResultTitle = standardize_title($result->{title});
+			my $standardOriginalTitle = standardize_title($result->{original_title});
+			next unless ($standardResultTitle =~ /^$standardTitle$/i || $standardOriginalTitle =~ /^$standardTitle$/i);
+	
+			if (defined $data_cache->{movie_lookup}->{$result->{id}}) {
+	                	$stats{tmdb_movie_used_cache_entry}++;
 			} else {
-				printf( "  %s:\t%s\n",
-					$result->{id}, $result->{title} );
+			        &get_tmdb_movie_online($tmdb, $title, $result->{id});
 			}
-
+	
+			if (defined $data_cache->{movie_lookup}->{$result->{id}}->{runtime} && defined $prog_duration &&
+				$data_cache->{movie_lookup}->{$result->{id}}->{runtime} > $prog_duration) {
+				next;
+			}
+			#print "Possible Candidate: ".Dumper($data_cache->{movie_lookup}->{$result->{id}});
+	
+			#$data_cache->{movie_lookup}->{$movie_id};
+	
+			my $found_year = 0;
+			#print("Release Date: ".$result->{release_date}."\n");
+			if (defined $result->{release_date} && $result->{release_date} =~ /^((19|20)\d\d)/) {
+				$found_year = $1;
+			}
+			my $desc_match = 0;
+			$desc_match = fuzzy_description_match($prog_description, $result->{overview}, $result->{id});
+			
+			print ("    Movie year: ".dump($movie_year).", Found Year: ".dump($found_year)."\n") if defined $movie_year;
+			if ($desc_match && (! (defined $movie_year) || ($found_year && ( abs($movie_year - $found_year) <= 1))) ) {
+				$urls{$result->{id}}++;
+				$urls_found++ if ($urls{$result->{id}} == 1);
+				if (defined $result->{release_date}) {
+					printf( "  %s:\t%s (%s)\n",
+						$result->{id}, $result->{title},
+						split( /-/, $result->{release_date}, 1 ) );
+				} else {
+					printf( "  %s:\t%s\n",
+						$result->{id}, $result->{title} );
+				}
+	
+			}
 		}
 	}
 	if ($urls_found <1) {
+		Shepherd::Common::log("  online TMDb search for '$title' with year") if defined $movie_year;
+		Shepherd::Common::log("  online TMDb search for '$title'") if !defined $movie_year;
+
 		foreach my $result (@results) {
 			#print(dump($result));
 			my $standardResultTitle = standardize_title($result->{title});
@@ -478,8 +525,8 @@ sub search_tmdb_online
 			if (defined $result->{release_date} && $result->{release_date} =~ /^((19|20)\d\d)/) {
 				$found_year = $1;
 			}
-			print ("    Movie year: ".dump($movie_year).", Found Year: ".dump($found_year)."\n");
-			if (!$movie_year || ($found_year && ( abs($movie_year - $found_year) <= 1)) ) {
+			print ("    Movie year: ".dump($movie_year).", Found Year: ".dump($found_year)."\n") if defined $movie_year;
+			if (!(defined $movie_year) || ($found_year && ( abs($movie_year - $found_year) <= 1)) ) {
 				$urls{$result->{id}}++;
 				$urls_found++ if ($urls{$result->{id}} == 1);
 				if (defined $result->{release_date}) {
@@ -496,6 +543,7 @@ sub search_tmdb_online
 	}
 
 	if ($urls_found < 1) {
+		Shepherd::Common::log("  online TMDb search for AKA titles for '$title'");
 		foreach my $result (@results) {
 			#print (dump($result));
 			my $movie = $tmdb->movie( id => $result->{id});
@@ -545,13 +593,13 @@ sub search_tmdb_online
 	# only insert into cache if we match exactly _1_ movie
 	if ($urls_found == 1) {
 		my $this_url = (keys %urls)[0];
-		$data_cache->{movie_id_lookup}->{$post_fields}->{id} = $this_url;
+		$data_cache->{movie_id_lookup}->{$cache_key}->{id} = $this_url;
 		$stats{tmdb_lookup_added_positive_cache_entry}++;
 	} else {
 		Shepherd::Common::log("    online search failed: wanted 1 match, got $urls_found matches.");
 		# negatively cache our failed lookup
-		$data_cache->{movie_id_lookup}->{$post_fields}->{id} = "-";
-		$data_cache->{movie_id_lookup}->{$post_fields}->{num_choices} =
+		$data_cache->{movie_id_lookup}->{$cache_key}->{id} = "-";
+		$data_cache->{movie_id_lookup}->{$cache_key}->{num_choices} =
 		  $urls_found;
 	}
 }
@@ -736,108 +784,108 @@ sub programme_cb( $ )
 	}
 
 	$stats{included_for_tmdb_lookup}++;
-	#print (dump($prog));
-
-	#
-	# find movie url
-	# (either via a cached previous search or via TMDb "power search")
-	#
-	my @search_fields;
-	push(@search_fields, "title=".Shepherd::Common::urlify($movie_title));
-#	push(@search_fields, "&countries=".Shepherd::Common::urlify($prog->{country}->[0][0]))
-#	  if ((defined $prog->{country}) && (defined $prog->{country}->[0][0]));
-	push(@search_fields, "&year=".Shepherd::Common::urlify($prog->{date}))
-	  if ((defined $prog->{date}) && ($prog->{date} > 0));
-#	push(@search_fields, "&language=".Shepherd::Common::urlify($prog->{language}->[0] =~ /(^[^,]*)/))
-#	  if ((defined $prog->{language}) && (defined $prog->{language}->[0]));
-	# &exact=y
-	# cast/crew
+	#print (dump($prog->{'episode-num'}));
+	#exit;
 
 	Shepherd::Common::log("programme ".$stats{programmes}.": \"$movie_title\" ($prog_duration minutes)");
 
 	# first search using everything we can...
-	my $orig_post_fields = join("",@search_fields);
-	my $post_fields;
-	my $found = 0;
-	while ((scalar(@search_fields) > 0) && (!$found)) {
-		if ($movie_subtitle) {
-		        $post_fields = "title=".Shepherd::Common::urlify($movie_title." ".$movie_subtitle);
-			$orig_post_fields = $post_fields;
-			push(@search_fields, $post_fields);
-		} else {
-			$post_fields = join("",@search_fields);
-		}
+	my $found_id = 0;
+	my $found_title = 0;
+	my $imdb_id;
+	my $freeview_id;
+	#
+	# first check if we have a imdb id for this
+	#
+	if (defined $prog->{'episode-num'} && (scalar @{$prog->{'episode-num'}}) >= 1) {
+		foreach my $episode (@{$prog->{'episode-num'}}) {
+			if (defined @{$episode}[1] && @{$episode}[1] eq "imdb.com") {
+				
+				$imdb_id = @{$episode}[0];
+				$imdb_id =~ s/title\///;
+				Shepherd::Common::log("   found imdb id: \"$movie_title\" ($imdb_id)");
 
-		#
-		# first check if we have a previous cache entry for this
-		#
-		if (defined $data_cache->{movie_id_lookup}->{$post_fields} and
-				defined $data_cache->{movie_id_lookup}->{$post_fields}->{id} 
-#				and !($data_cache->{movie_id_lookup}->{$post_fields}->{id} eq "-")
-		) {
-			if ($data_cache->{movie_id_lookup}->{$post_fields}->{id} eq "-") {
-				# negatively cached
-				$stats{tmdb_lookup_used_negative_cache_entry}++;
-				undef $movie_subtitle;
-				pop(@search_fields);
-			} else {
-				# positive cache
-				$stats{tmdb_lookup_used_cache_entry}++;
-				$found = 1;
-			}
-			Shepherd::Common::log("  used (".($found ? "positive" : "negative")." cache) search: $post_fields");
-		} else {
-			#
-			# no cache, go look it up
-			#
-			&search_tmdb_online($tmdb, $movie_title, $post_fields, $movie_year, $prog_duration, $prog->{desc}->[0]->[0]);
-
-			# TMDb web site failed/returned unexpected result, just skip rest
-			goto END
-			  if (!defined $data_cache->{movie_id_lookup}->{$post_fields} or
-					!defined $data_cache->{movie_id_lookup}->{$post_fields}->{id});
-
-			if ($data_cache->{movie_id_lookup}->{$post_fields}->{id} eq "-") {
-				# lookup failed.
-
-				# if it returned no hits, perhaps our search was too specific.
-				# make it less specific if we can
-				if ($data_cache->{movie_id_lookup}->{$post_fields}->{num_choices} == 0) {
-					undef $movie_subtitle;
-					pop(@search_fields);
-				} else {
-					# search wasn't specific enough.  (more than 1 hit)
-
-					if ($movie_subtitle) {
-						# try again if subtitle in search
-						undef $movie_subtitle;
-						pop(@search_fields);
+				# Check cache
+				if (defined $data_cache->{movie_id_lookup}->{$imdb_id} &&
+					$data_cache->{movie_id_lookup}->{$imdb_id}->{id}) {
+					if ($data_cache->{movie_id_lookup}->{$imdb_id}->{id} eq "-") {
+						$stats{tmdb_lookup_used_negative_cache_entry}++;
 					} else {
-						# skip ahead to simple search
-						# fill in less detailed searches or we fetch them next time
-						pop(@search_fields);
-						while (scalar(@search_fields) > 0) {
-							$post_fields = join("",@search_fields);
-							$data_cache->{movie_id_lookup}->{$post_fields}->{last_fetched} = time;
-							$data_cache->{movie_id_lookup}->{$post_fields}->{id} = '-';
-							$data_cache->{movie_id_lookup}->{$post_fields}->{num_choices} = 1000;
-							pop(@search_fields);
-						}
+						$stats{tmdb_lookup_used_cache_entry}++;
+						$found_id = 1;
+					}
+				} else {
+					Shepherd::Common::log("   Running online search form imdb id $imdb_id");
+					&search_tmdb_online_imdb($tmdb, $imdb_id);
+					if (defined $data_cache->{movie_id_lookup}->{$imdb_id} &&
+						$data_cache->{movie_id_lookup}->{$imdb_id}->{id} ne "-") {
+						Shepherd::Common::log("  **Found_ID");
+
+						$found_id = 1;
 					}
 				}
-			} else {
-				# lookup succeeded
-				$found = 1;
+			} elsif(defined @{$episode}[1] && @{$episode}[1] eq "freeview") {
+				$freeview_id = @{$episode}[0];
 			}
 		}
 	}
 
-	goto END if (!$found);
+	my $cache_key;
+	if (defined $movie_year) {
+		$cache_key = $movie_title ." ".$movie_year if defined $movie_year;
+	} else {
+		$cache_key = $movie_title;
+	}
+	
 
-	$data_cache->{movie_id_lookup}->{$orig_post_fields}->{id} = $data_cache->{movie_id_lookup}->{$post_fields}->{id}
-			if ($post_fields ne $orig_post_fields);
+	if (!$found_id) {
+		Shepherd::Common::log("No IMDB ID lookup, Run title search for $movie_title");
 
-	my $movie_id = $data_cache->{movie_id_lookup}->{$post_fields}->{id};
+		if (defined $data_cache->{movie_id_lookup}->{$cache_key} and
+				defined $data_cache->{movie_id_lookup}->{$cache_key}->{id} 
+#				and !($data_cache->{movie_id_lookup}->{$cache_key}->{id} eq "-")
+		) {
+			if ($data_cache->{movie_id_lookup}->{$cache_key}->{id} eq "-") {
+				# negatively cached
+				$stats{tmdb_lookup_used_negative_cache_entry}++;
+			} else {
+				# positive cache
+				$stats{tmdb_lookup_used_cache_entry}++;
+				$found_title = 1;
+			}
+			Shepherd::Common::log("  used (".($found_title ? "positive" : "negative")." cache) search: $cache_key");
+		} else {
+
+			#
+			# no cache, go look it up
+			#
+			Shepherd::Common::log("Runing online title search for $cache_key");
+
+			&search_tmdb_online($tmdb, $movie_title, $movie_year, $prog_duration, $prog->{desc}->[0]->[0]);
+	
+			# TMDb web site failed/returned unexpected result, just skip rest
+			goto END
+			  if (!defined $data_cache->{movie_id_lookup}->{$cache_key} or
+					!defined $data_cache->{movie_id_lookup}->{$cache_key}->{id});
+
+			$found_title = 1;
+
+		}
+	}
+
+	goto END if (!$found_title && !$found_id);
+
+	my $movie_id;
+	if ($found_id) {
+		$movie_id = $data_cache->{movie_id_lookup}->{$imdb_id}->{id};
+
+	} else {
+		$movie_id = $data_cache->{movie_id_lookup}->{$cache_key}->{id};
+
+	}
+
+	print("    Movie ID: $movie_id\n");
+
 
 	# no match or negative cache match - bail out
 	goto END if ((!defined $movie_id) || ($movie_id eq "-"));
@@ -867,6 +915,12 @@ sub programme_cb( $ )
 	my $tmdb_movie = $data_cache->{movie_lookup}->{$movie_id};
 	$stats{added_tmdb_data}++;
 
+	if (defined $prog->{'episode-num'}) {
+		push (@{$prog->{'episode-num'}}, [ "movie/".$movie_id, 'themoviedb.org' ]);
+	} else {
+		$prog->{'episode-num'} = [ [ "movie/".$movie_id, 'themoviedb.org' ] ];
+	}
+	
 	if ($opt->{dont_augment_desc}) {
 
 		# if not a reasonable description, add anything we've got
@@ -1021,8 +1075,9 @@ sub programme_cb( $ )
 	# don't fill in XMLTV orig-language - mythtv ignores it
 	#print ("\nBEFORE ARRAY: ".dump($prog->{category})."\n");
 	#print ("AFTER ARRAY: ".dump($prog->{category})."\n\n");
-        push(@{($prog->{category})},["movie","en"]);
 	my @grep_array = grep { $_->[0] ne 'series' } @{$prog->{category}};
+	@grep_array = grep { $_->[0] ne 'movie' } @grep_array;
+        push(@grep_array,["movie","en"]);
 	@{$prog->{category}} = @grep_array;
 
 	if (defined $tmdb_movie->{genres}) {
@@ -1054,8 +1109,10 @@ sub programme_cb( $ )
 		my ($season) = ($tmdb_movie->{airdate} =~ /Season\s+(\d+)/i);
 		my ($episode) = ($tmdb_movie->{airdate} =~ /Episode\s+(\d+)/i);
 		if ($season || $episode) {
+			
+			Shepherd::Common::log("Adding xmltv_ns episode-num");
 			my $xmltv_ns = ($season ? ($season - 1) : "") ." . ". ($episode ? ($episode - 1) : "") ." . 0";
-			$prog->{'episode-num'} = [ [ $xmltv_ns, 'xmltv_ns' ] ];
+			push (@{$prog->{'episode-num'}}, [ $xmltv_ns, 'xmltv_ns' ]) if (defined $prog->{'episode-num'});
 		}
 	}
 
@@ -1149,21 +1206,46 @@ sub run_test
 	$opt->{debug} = 1;
 	$opt->{fast} = 1;
 	Shepherd::Common::log("running test for: ".$opt->{test});
+	my $cache_key;
+	if (defined $opt->{test_year}) {
+		$cache_key = $opt->{test}." ".$opt->{test_year};
+	} else {
+		$cache_key = $opt->{test};
+	}
 
-	my $post_fields = "title=".Shepherd::Common::urlify($opt->{test});
-	$post_fields .= "&year=".Shepherd::Common::urlify($opt->{test_year})
-	  if ((defined $opt->{test_year}) && ($opt->{test_year} > 0));
-
-	&search_tmdb_online($tmdb, $opt->{test},$post_fields,$opt->{test_year},$opt->{test_duration},$opt->{test_desc});
+	&search_tmdb_online($tmdb, $opt->{test},$opt->{test_year},$opt->{test_duration},$opt->{test_desc});
 
 	die "lookup unsuccessful\n"
-	  if ((!defined $data_cache->{movie_id_lookup}->{$post_fields}) ||
-	      ($data_cache->{movie_id_lookup}->{$post_fields}->{id} eq "-"));
+	  if ((!defined $data_cache->{movie_id_lookup}->{$cache_key}) ||
+	      ($data_cache->{movie_id_lookup}->{$cache_key}->{id} eq "-"));
 
-	my $movie_id = $data_cache->{movie_id_lookup}->{$post_fields}->{id};
+	my $movie_id = $data_cache->{movie_id_lookup}->{$cache_key}->{id};
 	&get_tmdb_movie_online($tmdb, $opt->{test},$movie_id);
 	print "Movie details returned: ".Dumper($data_cache->{movie_lookup}->{$movie_id});
 
+	exit(0);
+}
+
+##############################################################################
+
+##############################################################################
+
+sub run_test_imdb
+{
+	$opt->{debug} = 1;
+	$opt->{fast} = 1;
+	Shepherd::Common::log("running test for: ".$opt->{test_imdb});
+
+	&search_tmdb_online_imdb($tmdb, $opt->{test_imdb});
+
+	die "lookup unsuccessful\n"
+	  if ((!defined $data_cache->{movie_id_lookup}->{$opt->{test_imdb}}) ||
+	      ($data_cache->{movie_id_lookup}->{$opt->{test_imdb}}->{id} eq "-"));
+
+	my $movie_id = $data_cache->{movie_id_lookup}->{$opt->{test_imdb}}->{id};
+
+	&get_tmdb_movie_online($tmdb, $opt->{test}, $movie_id);
+	print "Movie details returned: ".Dumper($data_cache->{movie_lookup}->{$movie_id});
 	exit(0);
 }
 
