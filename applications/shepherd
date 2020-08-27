@@ -1,7 +1,7 @@
 #!/usr/bin/env perl
 
 our $progname = 'shepherd';
-my $version = '1.9.15';
+my $version = '1.9.16';
 
 # tv_grab_au
 # "Shepherd"
@@ -1525,7 +1525,7 @@ sub query_component_type
 	    }
 	}
     }
-    return sort @ret;
+    return @ret;
 }
 
 sub query_name
@@ -5028,7 +5028,7 @@ sub postprocess_data
 
     &log("\nSHEPHERD: Postprocessing stage:\n");
 
-    foreach my $postprocessor (sort { $components->{$a} <=> $components->{$b} } query_postprocessors()) {
+    foreach my $postprocessor (sort { $components->{$a} cmp $components->{$b} } query_postprocessors()) {
 	next if ($components->{$postprocessor}->{disabled});
 	next if (defined $plugin_data->{$postprocessor}->{failed_test});
 	next if (!$components->{$postprocessor}->{ready});
