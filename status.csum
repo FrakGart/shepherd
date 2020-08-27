@@ -1,4 +1,4 @@
-application     shepherd            1.9.14	97eb6f54378516af58b6dcfcd721d27e076f0237	b09cab9cc334f327e7c4eeb3ef4f951851e8ce1e
+application     shepherd            1.9.15	97eb6f54378516af58b6dcfcd721d27e076f0237	2aafc70bdd142c9d546a230de784a02a65f00ecd
 reference       channel_list        148		98db7e8c3adfc08745e79d61b60a83dca2e797db	7ab2400e9f2c2e917578afee49f780037849fea6
 reference       Shepherd/Common.pm  1.32	b8e59c9f7e4a13517eba974c40ba5745f3688e76	a5e3b89aa0f8e096328944bed0c9eab55e231e1d
 reference       Shepherd/MythTV.pm  0.42	85f83123706d06d99d896ee3d4767d6bdff71ca1	d5f6290d8b77d537f49f43d5167a54264b2599c7
@@ -25,5 +25,5 @@ postprocessor	add_channel_icons   0.21	a4d3d745dfcbd02fdba7c979e7990f61efcc3206	
 postprocessor   brownie_postprocess     0.35    67e4588db4987142f02f656db186367bd80c7c8c        5cc3bdd2ee1e92297326816cafb41b956d711df3
 #postprocessor	the_movie_db_augment  1.0	48e20d775acf9efb58f4f48002f20aff54154808	feaac994c23554098639494a62c8483bcd91e594
 postprocessor   tmdb_augment_data       0.11    34d7c122226fae9cec9a6283ae509e2e58baf9a9	d9d4ad5df00e7dfa705ad6b32280097c84f268f8
-postprocessor	zzz_imdb_ratings	0.01	34c288d4dcd03cc1277d77bd586c50f23f11bb94	c71d473d69eac76bdb59108be79d1d1021133b37
+postprocessor	zzz_imdb_ratings	0.02	34c288d4dcd03cc1277d77bd586c50f23f11bb94	282611495553f1a1b4c003192dc8f8f89d282301
 END

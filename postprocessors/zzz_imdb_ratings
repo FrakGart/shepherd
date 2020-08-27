@@ -47,7 +47,7 @@
 use strict;
 use warnings;
 my $progname = "zzz_imdb_ratings";
-my $version = "0.01";
+my $version = "0.02";
 
 use XMLTV;
 use POSIX qw(strftime mktime);
@@ -264,31 +264,34 @@ sub programme_cb( $ )
 
 	#print Dumper($prog);
 
-	if (defined $prog->{'episode-num'} && (scalar @{$prog->{'episode-num'}}) >= 1) {
+	if (defined $prog->{category} and (my ($matched) = grep $_->[0] eq 'movie', @{$prog->{category}}) and  defined $prog->{'episode-num'} and (scalar @{$prog->{'episode-num'}}) >= 1) {
 		foreach my $episode (@{$prog->{'episode-num'}}) {
 			if (defined @{$episode}[1] && @{$episode}[1] eq "imdb.com") {
 
 				my $imdb_id = @{$episode}[0];
-				$imdb_id =~ s/title\///;
-				Shepherd::Common::log("   found imdb id: $prog->{'title'}->[0]->[0] ($imdb_id)");
+				if ( $imdb_id =~ m/(tt\d+)/ ) {
+					my $id = $1;
+				
+					Shepherd::Common::log("   $prog->{'title'}->[0]->[0]: found imdb id: $id");
 
-				my $rating = &get_imdb_rating($imdb_id);
+					my $rating = &get_imdb_rating($id);
 
-				if (defined $rating != 0 && $rating != 0) {
-					# print(Dumper($rating));
-					Shepherd::Common::log("   found rating: $rating->{'averageRating'}/10 ($rating->{'numVotes'})");
-					$prog->{'star-rating'} = [ ];
-					if ($rating->{'numVotes'} > 10000) {
-						push @{$prog->{'star-rating'}}, [ $rating->{'averageRating'}."/10", "imdb.com", undef ];
+					if (defined $rating != 0 && $rating != 0) {
+						# print(Dumper($rating));
+						Shepherd::Common::log("   $prog->{'title'}->[0]->[0]: found rating: $rating->{'averageRating'}/10 ($rating->{'numVotes'})");
+						$prog->{'star-rating'} = [ ];
+						if ($rating->{'numVotes'} > 10000) {
+							push @{$prog->{'star-rating'}}, [ $rating->{'averageRating'}."/10", "imdb.com", undef ];
+						}
+
 					}
-
 				}
 
 			}
 		}
 	}
 
-	print(Dumper($prog));
+#	print(Dumper($prog));
 
 	$writer->write_programme($prog);
 } 
