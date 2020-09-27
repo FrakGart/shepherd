@@ -90,7 +90,7 @@ my $writer;
 my %stats;
 my $o;
 
-Shepherd::Common::program_begin(\$o, "xmltv_net", "0.03", \%stats);
+Shepherd::Common::program_begin(\$o, "xmltv_net", "0.04", \%stats);
 &start_writing_xmltv();
 #my ($channels, $opt_channels, $gaps) =();
 
