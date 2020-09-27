@@ -276,6 +276,9 @@ regions:
       - TEN HD
       - TVSN
       - 9Rush
+      - 10 Bold
+      - 10 Peach
+      - 10 Shake
   78:
     state: QLD
     name: "Gold Coast"
