@@ -14,17 +14,18 @@ use Data::Dumper;
 #
 # supported Shepherd channels and the corresponding number @ zaxmltv
 
-my @supported = ("10 Bold","10 HD","10 Peach","7flix","7HD","7mate","7TWO","9Gem","9Go!",
+my @supported = ("10 Bold","10 HD","10 Peach","10 Shake","7flix","7HD","7mate","7TWO","9Gem","9Go!",
 		"9HD","9Life","9Rush","ABC COMEDY/ABC KIDS","ABC HD","ABCME","ABCNEWS",
 		"NITV","SBS Food", "SBS HD", "SBS World Movies", "SBSVICELANDHD");
 my %channel_map = (
-        '1.yourtv.com.au' => '10bold.shepherd.au',
 #	'10.yourtv.com.au' => '10',
         '11.yourtv.com.au' => '10peach.shepherd.au',
-#        '12.yourtv.com.au' => '10 Bold',
-        '13.yourtv.com.au' => '10hd.shepherd.au',
-#        '14.yourtv.com.au' => 'TVSN QLD',
-#        '15.yourtv.com.au' => 'SpreeTV QLD',
+#        '1.yourtv.com.au' => '10 Bold',
+        '12.yourtv.com.au' => '10bold.shepherd.au',
+        '13.yourtv.com.au' => '10shake.shepherd.au',
+        '15.yourtv.com.au' => '10hd.shepherd.au',
+        '16.yourtv.com.au' => 'tvsn.shepherd.au',
+        '1y.yourtv.com.au' => 'spreetv.shepherd.au',
 #        '2.yourtv.com.au' => 'ABC',
         '20.yourtv.com.au' => 'abchd.shepherd.au',
 #        '21.yourtv.com.au' => 'ABC',
@@ -88,7 +89,7 @@ my $writer;
 my %stats;
 my $o;
 
-Shepherd::Common::program_begin(\$o, "xmltv_net", "0.02", \%stats);
+Shepherd::Common::program_begin(\$o, "xmltv_net", "0.03", \%stats);
 &start_writing_xmltv();
 #my ($channels, $opt_channels, $gaps) =();
 
