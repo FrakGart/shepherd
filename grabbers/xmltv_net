@@ -16,7 +16,8 @@ use Data::Dumper;
 
 my @supported = ("10 Bold","10 HD","10 Peach","10 Shake","7flix","7HD","7mate","7TWO","9Gem","9Go!",
 		"9HD","9Life","9Rush","ABC COMEDY/ABC KIDS","ABC HD","ABCME","ABCNEWS",
-		"NITV","SBS Food", "SBS HD", "SBS World Movies", "SBSVICELANDHD");
+		"NITV","SBS Food", "SBS HD", "SBS World Movies", "SBSVICELANDHD",
+		"Triple J", "Triple J Unearthed", "Double J", "ABC Brisbane");
 my %channel_map = (
 #	'10.yourtv.com.au' => '10',
         '11.yourtv.com.au' => '10peach.shepherd.au',
@@ -32,12 +33,12 @@ my %channel_map = (
         '22.yourtv.com.au' => 'abccomedy/abckids.shepherd.au',
         '23.yourtv.com.au' => 'abcme.shepherd.au',
         '24.yourtv.com.au' => 'abcnews.shepherd.au',
-#        '25.yourtv.com.au' => 'ABC Local Radio',
+        '25.yourtv.com.au' => 'abcbrisbane.shepherd.au',
 #        '26.yourtv.com.au' => 'ABC Radio National',
 #        '27.yourtv.com.au' => 'ABC Classic',
-#        '28.yourtv.com.au' => 'Triple J',
-#        '29.yourtv.com.au' => 'Triple J Unearthed',
-#        '200.yourtv.com.au' => 'Double J',
+        '28.yourtv.com.au' => 'triplej.shepherd.au',
+        '29.yourtv.com.au' => 'triplejunearthed.shepherd.au',
+        '200.yourtv.com.au' => 'doublej.shepherd.au',
 #        '201.yourtv.com.au' => 'ABC Jazz',
 #        '202.yourtv.com.au' => 'ABC Kids Listen',
 #        '203.yourtv.com.au' => 'ABC Country',
