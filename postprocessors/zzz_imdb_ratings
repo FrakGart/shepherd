@@ -47,7 +47,7 @@
 use strict;
 use warnings;
 my $progname = "zzz_imdb_ratings";
-my $version = "0.02";
+my $version = "0.03";
 
 use XMLTV;
 use POSIX qw(strftime mktime);
@@ -67,6 +67,7 @@ my $channels, my $opt_channels;
 my $opt = { };
 $opt->{output_file} =	"output.xmltv";
 $opt->{debug} =			0;
+$opt->{skip_categories} =       "Radio,Infotainment,Shopping,Business and Finance,Game Show,News,Parliament,Current Affairs,sports,Sport,Weather,Reality,live";
 
 my $ratings_tsv_file = "title.ratings.tsv";
 my $ratings_tsv_url = "https://datasets.imdbws.com/title.ratings.tsv.gz";
@@ -83,6 +84,8 @@ GetOptions(
 	'timezone=s'		=> \$opt->{timezone},		# ignored
 	'channels_file=s'	=> \$opt->{channels_file},
 	'config-file=s'		=> \$opt->{configfile},		# ignored
+
+	'skip_categories=s'	=> \$opt->{skip_categories},
 
 	'test=s'		=> \$opt->{test},
 
@@ -292,7 +295,7 @@ sub programme_cb( $ )
 	}
 
 #	print(Dumper($prog));
-
+END:
 	$writer->write_programme($prog);
 } 
 
