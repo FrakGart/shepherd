@@ -24,7 +24,7 @@ use strict;
 use warnings;
 
 my $progname = "tmdb_augment_data";
-my $version = "0.12";
+my $version = "0.13";
 
 use XMLTV;
 use POSIX qw(strftime mktime);
@@ -59,7 +59,7 @@ $opt->{lang} = 			"en";
 $opt->{debug} =			1;
 $opt->{min_duration} =		70;	# 65 mins
 $opt->{max_duration} =		300;	# 5 hours
-$opt->{skip_categories} = 	"Infotainment,Shopping,Business and Finance,Game Show,News,Parliament,Current Affairs,sports,Sport,Weather,Reality,live";
+$opt->{skip_categories} = 	"Radio,Infotainment,Shopping,Business and Finance,Game Show,News,Parliament,Current Affairs,sports,Sport,Weather,Reality,live";
 $opt->{cache_details_for} =	120;	# cache movie details for 4 months
 $opt->{cache_title_for} = 	120;	# cache title lookups for 4 months
 $opt->{dont_augment_desc} =	0;	# from 2008/04/15
